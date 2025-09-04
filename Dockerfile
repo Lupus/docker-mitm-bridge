@@ -33,7 +33,8 @@ COPY docker/scripts/run_opa_filter.py /scripts/run_opa_filter.py
 # Copy scripts
 COPY scripts/entrypoint.sh /entrypoint.sh
 COPY scripts/install-ca.sh /scripts/install-ca.sh
-RUN chmod +x /entrypoint.sh /scripts/install-ca.sh
+COPY scripts/setup.sh /scripts/setup.sh
+RUN chmod +x /entrypoint.sh /scripts/install-ca.sh /scripts/setup.sh
 
 # Create mitmproxy user
 RUN groupadd --gid 3000 mitmproxy && \
