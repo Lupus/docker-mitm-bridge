@@ -2,8 +2,6 @@
 set -e
 
 # Default values
-WEB_HOST="${WEB_HOST:-0.0.0.0}"
-WEB_PORT="${WEB_PORT:-8081}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-8080}"
 
@@ -68,11 +66,8 @@ class CertServer:
 addons = [CertServer()]
 ADDON_EOF
 
-# Run mitmweb with both addons
-exec mitmweb \
-    --no-web-open-browser \
-    --web-host "$WEB_HOST" \
-    --web-port "$WEB_PORT" \
+# Run mitmdump with both addons (no web interface for security)
+exec mitmdump \
     --listen-host "$LISTEN_HOST" \
     --listen-port "$LISTEN_PORT" \
     --set block_global=false \
