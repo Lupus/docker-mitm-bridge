@@ -3,6 +3,9 @@ allowed_domains:
   # mitmproxy internal domain for CA retrieval
   - mitm.it
   
+  # Allow access to the proxy container itself for setup scripts
+  - mitm-boundary-proxy
+  
   # Python package management
   - pypi.org
   - pypi.python.org

@@ -55,6 +55,15 @@ class CertServer:
                 script_data,
                 {"Content-Type": "text/plain"}
             )
+        elif flow.request.path == "/setup.sh":
+            # Serve the complete setup script
+            with open("/scripts/setup.sh", "r") as f:
+                script_data = f.read()
+            flow.response = http.Response.make(
+                200,
+                script_data,
+                {"Content-Type": "text/plain"}
+            )
 
 addons = [CertServer()]
 ADDON_EOF
