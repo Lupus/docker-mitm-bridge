@@ -188,10 +188,6 @@ def validate_config(config: dict) -> dict:
         if 'listen_port' in config['proxy']:
             if not validate_port(config['proxy']['listen_port']):
                 errors.append(f"Invalid listen port: {config['proxy']['listen_port']}")
-        
-        if 'web_port' in config['proxy']:
-            if not validate_port(config['proxy']['web_port']):
-                errors.append(f"Invalid web port: {config['proxy']['web_port']}")
     
     # Validate OPA configuration
     if 'opa' in config:

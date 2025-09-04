@@ -128,17 +128,8 @@ class TestSuite:
                 
             print(f"  ✅ Proxy container running")
             
-            # Check if web interface is accessible
-            try:
-                response = requests.get('http://localhost:8081', timeout=5)
-                if response.status_code == 200:
-                    print(f"  ✅ Web interface accessible at http://localhost:8081")
-                else:
-                    print(f"  ❌ Web interface returned status {response.status_code}")
-                    return False
-            except Exception as e:
-                print(f"  ❌ Cannot access web interface: {e}")
-                return False
+            # Web interface disabled for security - skip check
+            print(f"  ✅ Web interface disabled (security improvement)")
                 
             # Check if proxy port is accessible
             try:

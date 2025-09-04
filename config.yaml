@@ -7,7 +7,6 @@ network:
 proxy:
   container_name: mitm-boundary-proxy
   listen_port: 8080
-  web_port: 8081
   
 opa:
   policy_dir: ./opa-policies

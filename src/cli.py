@@ -76,7 +76,6 @@ def init():
     click.echo(click.style("Initialization complete!", fg="green", bold=True))
     click.echo(f"Network: {config['network']['name']}")
     click.echo(f"Proxy: http://localhost:{config['proxy']['listen_port']}")
-    click.echo(f"Web UI: http://localhost:{config['proxy']['web_port']}")
 
 
 @cli.command()
@@ -186,7 +185,6 @@ def status():
         if proxy_status['running']:
             click.echo(f"Memory usage: {proxy_status['memory_usage_mb']} MB")
             click.echo(f"Proxy port: {config['proxy']['listen_port']}")
-            click.echo(f"Web UI: http://localhost:{config['proxy']['web_port']}")
     else:
         click.echo(click.style("Proxy container not found", fg="red"))
 
