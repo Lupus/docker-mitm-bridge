@@ -1,0 +1,13 @@
+# Docker MITM Bridge Configuration
+
+network:
+  name: mitm-filtered
+  subnet: 172.30.0.0/16
+
+proxy:
+  container_name: mitm-boundary-proxy
+  listen_port: 8080
+  web_port: 8081
+  
+opa:
+  policy_dir: ./opa-policies
