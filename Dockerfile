@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Upgrade pip and install Python dependencies
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir \
-    mitmproxy==10.1.6 \
+    mitmproxy==12.1.2 \
     opa-wasm==0.3.2 \
     wasmer==1.1.0 \
     wasmer-compiler-cranelift==1.1.0
