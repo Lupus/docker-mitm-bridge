@@ -1,0 +1,59 @@
+# Domains with restricted access (only GET/HEAD allowed)
+allowed_domains:
+  # mitmproxy internal domain for CA retrieval
+  - mitm.it
+  
+  # Python package management
+  - pypi.org
+  - pypi.python.org
+  - files.pythonhosted.org
+  - pythonhosted.org
+  
+  # NPM registry
+  - registry.npmjs.org
+  - registry.yarnpkg.com
+  
+  # Rust/cargo infrastructure
+  - crates.io
+  - static.crates.io
+  - index.crates.io
+  
+  # Development tools
+  - github.com
+  - api.github.com
+  - raw.githubusercontent.com
+  - objects.githubusercontent.com
+  - gitlab.com
+  
+  # Ubuntu package repositories
+  - archive.ubuntu.com
+  - security.ubuntu.com
+  - ports.ubuntu.com
+  
+  # Debian package repositories
+  - deb.debian.org
+  - security.debian.org
+  - ftp.debian.org
+  
+  # Alpine package repositories
+  - dl-cdn.alpinelinux.org
+  
+  # Microsoft package repositories (for VS Code, .NET, etc.)
+  - packages.microsoft.com
+  
+  # Node.js repositories
+  - deb.nodesource.com
+  - rpm.nodesource.com
+  - nodejs.org
+
+# Domains with unrestricted access (all HTTP methods allowed)
+unrestricted_domains:
+  # AI APIs
+  - api.anthropic.com
+  - console.anthropic.com
+  - api.openai.com
+  - platform.openai.com
+  
+  # Monitoring and telemetry
+  - sentry.io
+  - statsig.anthropic.com

@@ -1,0 +1,1 @@
+- use uv-based Python virtualenv for this project
