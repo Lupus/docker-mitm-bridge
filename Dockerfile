@@ -20,59 +20,72 @@ RUN git clone https://github.com/microsoft/regorus.git /tmp/regorus
 WORKDIR /tmp/regorus/bindings/python
 RUN maturin build --release
 
-# Main stage - Python app with mitmproxy and OPA integration
-FROM python:3.12-slim
+# Python dependencies stage - Install all Python packages
+FROM python:3.12-slim as python-builder
 
-# Set the working directory in the container
-WORKDIR /app
-
-# Install system dependencies
+# Install system dependencies needed for building Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements file
+COPY requirements.txt /tmp/requirements.txt
 
 # Copy Regorus wheel from build stage  
 COPY --from=regorus-builder /tmp/regorus/bindings/python/target/wheels/regorus*.whl /tmp/
 
+# Create virtual environment and install all dependencies
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
 # Upgrade pip and install Python dependencies
-RUN python -m pip install --upgrade pip && \
-    pip install --no-cache-dir \
+RUN /opt/venv/bin/python -m pip install --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir \
     mitmproxy==12.1.2 \
     PyYAML \
-    /tmp/*.whl && \
-    rm -rf /tmp/*.whl
+    /tmp/*.whl \
+    -r /tmp/requirements.txt
 
-# Create directories
-RUN mkdir -p /app/bundle /app/opa-output /scripts
+# Final stage - Minimal Python slim image (compatible with glibc dependencies)
+FROM python:3.12-slim
 
-# Copy OPA filter addon package
+# Remove unnecessary packages to minimize attack surface
+RUN apt-get update && apt-get remove -y \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && find /usr -type f -name "*.pyc" -delete \
+    && find /usr -type f -name "*.pyo" -delete
+
+# Copy Python virtual environment from builder stage
+COPY --from=python-builder /opt/venv /opt/venv
+
+# Set environment to use the virtual environment
+ENV PATH="/opt/venv/bin:${PATH}"
+ENV PYTHONPATH="/opt/venv/lib/python3.12/site-packages"
+ENV VIRTUAL_ENV="/opt/venv"
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Create non-root user and directories
+RUN groupadd --gid 3000 mitmproxy && \
+    useradd --uid 3000 --gid 3000 --create-home --shell /bin/bash mitmproxy && \
+    mkdir -p /app/bundle /app/opa-output /scripts /home/mitmproxy/.mitmproxy && \
+    chown -R 3000:3000 /home/mitmproxy /app/opa-output
+
+# Copy application files
 COPY docker/mitmproxy_opa /app/mitmproxy_opa
-
-# Copy addon loader script
 COPY docker/scripts/run_opa_filter.py /scripts/run_opa_filter.py
-
-# Copy scripts
 COPY scripts/entrypoint.sh /entrypoint.sh
 COPY scripts/install-ca.sh /scripts/install-ca.sh
 COPY scripts/setup.sh /scripts/setup.sh
-RUN chmod +x /entrypoint.sh /scripts/install-ca.sh /scripts/setup.sh
 
-# Create mitmproxy user
-RUN groupadd --gid 3000 mitmproxy && \
-    useradd --uid 3000 --gid 3000 --create-home --shell /bin/bash mitmproxy
+# Set proper permissions
+RUN chmod +x /entrypoint.sh /scripts/install-ca.sh /scripts/setup.sh /scripts/run_opa_filter.py && \
+    chmod -R 755 /scripts
 
-# Create mitmproxy config directory and set ownership
-RUN mkdir -p /home/mitmproxy/.mitmproxy && \
-    chown -R 3000:3000 /home/mitmproxy && \
-    chown -R 3000:3000 /app/opa-output
-
-# Set proper permissions for scripts
-RUN chmod -R 755 /scripts && \
-    chmod +x /scripts/run_opa_filter.py
-
-# Run as mitmproxy user
-USER 3000
+# Run as non-root user
+USER 3000:3000
 
 # Expose ports
 EXPOSE 8080 8081
