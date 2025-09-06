@@ -2,11 +2,10 @@
 """
 Mitmproxy addon that integrates with OPA for traffic filtering using Regorus
 """
-import json
 import sys
 import yaml
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional
 
 from mitmproxy import http, ctx
 import regorus
@@ -16,8 +15,8 @@ class OPAFilter:
     def __init__(self):
         # Look for policy files in the mounted bundle directory
         self.bundle_path = Path("/app/bundle")
+        self.data_file = self.bundle_path / "data.yml"
         self.engine: Optional[regorus.Engine] = None
-        self.data: Dict[str, Any] = {}
         self._has_ctx = False
         
     def load(self, loader):
@@ -45,30 +44,21 @@ class OPAFilter:
                     ctx.log.info(f"Loading policy file: {rego_file}")
                 self.engine.add_policy_from_file(str(rego_file))
             
-            # Load data from YAML files
-            yaml_files = list(self.bundle_path.glob("*.yaml")) + list(self.bundle_path.glob("*.yml"))
-            for yaml_file in yaml_files:
-                if self._has_ctx:
-                    ctx.log.info(f"Loading data file: {yaml_file}")
-                with open(yaml_file, 'r') as f:
-                    yaml_data = yaml.safe_load(f)
-                    if yaml_data:
-                        self.engine.add_data(yaml_data)
-                        self.data.update(yaml_data)
+            # Load data from single data.yml file only
+            if not self.data_file.exists():
+                raise FileNotFoundError(f"Required data.yml file not found at {self.data_file}")
             
-            # Load data from JSON files  
-            json_files = list(self.bundle_path.glob("*.json"))
-            for json_file in json_files:
-                if self._has_ctx:
-                    ctx.log.info(f"Loading data file: {json_file}")
-                with open(json_file, 'r') as f:
-                    json_data = json.load(f)
-                    if json_data:
-                        self.engine.add_data(json_data)
-                        self.data.update(json_data)
+            if self._has_ctx:
+                ctx.log.info(f"Loading data file: {self.data_file}")
+            
+            with open(self.data_file, 'r') as f:
+                yaml_data = yaml.safe_load(f)
+                if not yaml_data:
+                    raise ValueError(f"data.yml file is empty or invalid: {self.data_file}")
+                self.engine.add_data(yaml_data)
                 
             if self._has_ctx:
-                ctx.log.info(f"Regorus engine loaded successfully with {len(rego_files)} policies and {len(self.data)} data keys")
+                ctx.log.info(f"Regorus engine loaded successfully with {len(rego_files)} policies and data from {self.data_file}")
         except Exception as e:
             if self._has_ctx:
                 ctx.log.error(f"Failed to load Regorus policy: {e}")
@@ -107,15 +97,21 @@ class OPAFilter:
             # Set input for Regorus engine
             self.engine.set_input(opa_input)
             
-            # Evaluate the decision rule - try to get the structured decision first
-            try:
-                decision_result = self.engine.eval_rule("data.mitmproxy.policy.decision")
-                allowed = decision_result.get("allow", False)
-                reason = decision_result.get("reason", "No reason provided")
-            except:
-                # Fallback to simple allow rule
-                allowed = self.engine.eval_rule("data.mitmproxy.policy.allow")
-                reason = "Policy evaluation result"
+            # Evaluate the decision rule - enforce structured decision format only
+            decision_result = self.engine.eval_rule("data.mitmproxy.policy.decision")
+            
+            # Strict validation of policy response format
+            if not isinstance(decision_result, dict):
+                raise ValueError(f"Policy must return a dict, got {type(decision_result)}")
+            
+            if "allow" not in decision_result:
+                raise ValueError("Policy decision must contain 'allow' field")
+            
+            if not isinstance(decision_result["allow"], bool):
+                raise ValueError(f"Policy 'allow' field must be boolean, got {type(decision_result['allow'])}")
+            
+            allowed = decision_result["allow"]
+            reason = decision_result.get("reason", "No reason provided")
             
             if self._has_ctx:
                 ctx.log.info(f"Regorus decision for {flow.request.method} {flow.request.url}: "
