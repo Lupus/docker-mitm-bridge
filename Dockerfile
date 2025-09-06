@@ -1,8 +1,27 @@
+# Build stage - Build Regorus Python bindings
+FROM python:3.12-slim as regorus-builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install maturin
+RUN pip install maturin
+
+# Clone and build Regorus Python bindings
+RUN git clone https://github.com/microsoft/regorus.git /tmp/regorus
+WORKDIR /tmp/regorus/bindings/python
+RUN maturin build --release
+
 # Main stage - Python app with mitmproxy and OPA integration
 FROM python:3.12-slim
-
-# Copy OPA binary from static image
-COPY --from=openpolicyagent/opa:latest-static /opa /usr/local/bin/opa
 
 # Set the working directory in the container
 WORKDIR /app
@@ -13,13 +32,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy Regorus wheel from build stage  
+COPY --from=regorus-builder /tmp/regorus/bindings/python/target/wheels/regorus*.whl /tmp/
+
 # Upgrade pip and install Python dependencies
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir \
     mitmproxy==12.1.2 \
-    opa-wasm==0.3.2 \
-    wasmer==1.1.0 \
-    wasmer-compiler-cranelift==1.1.0
+    PyYAML \
+    /tmp/*.whl && \
+    rm -rf /tmp/*.whl
 
 # Create directories
 RUN mkdir -p /app/bundle /app/opa-output /scripts

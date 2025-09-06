@@ -255,10 +255,19 @@ def update_policy():
     
     pm = ProxyManager(container_name=config['proxy']['container_name'])
     
-    # Check if proxy is running
-    if not pm.is_running():
-        click.echo(click.style("✗ Proxy is not running", fg="red"))
+    # Check proxy status
+    status = pm.get_status()
+    if not status['exists']:
+        click.echo(click.style("✗ Proxy container does not exist. Run 'init' first.", fg="red"))
         sys.exit(1)
+    
+    # Handle different container states
+    if not status['running']:
+        if status['status'] in ['restarting', 'exited']:
+            click.echo(click.style(f"ℹ Proxy is {status['status']}, attempting to restart...", fg="yellow"))
+        else:
+            click.echo(click.style(f"✗ Proxy is not running (status: {status['status']})", fg="red"))
+            sys.exit(1)
     
     click.echo("Restarting proxy to apply policy changes...")
     result = pm.restart()

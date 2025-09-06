@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Mitmproxy addon that integrates with OPA for traffic filtering
+Mitmproxy addon that integrates with OPA for traffic filtering using Regorus
 """
 import json
 import sys
+import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 from mitmproxy import http, ctx
-from opa_wasm import OPAPolicy
+import regorus
 
 
 class OPAFilter:
     def __init__(self):
-        # Look for bundle in the output directory
-        self.bundle_path = Path("/app/opa-output/bundle.tar.gz")
-        self.policy: Optional[OPAPolicy] = None
+        # Look for policy files in the mounted bundle directory
+        self.bundle_path = Path("/app/bundle")
+        self.engine: Optional[regorus.Engine] = None
         self.data: Dict[str, Any] = {}
         self._has_ctx = False
         
@@ -28,55 +29,58 @@ class OPAFilter:
             self._has_ctx = False
             
         if self._has_ctx:
-            ctx.log.info(f"Loading OPA bundle from: {self.bundle_path}")
+            ctx.log.info(f"Loading OPA policies from: {self.bundle_path}")
+        
         try:
-            import tarfile
-            import tempfile
+            # Create Regorus engine
+            self.engine = regorus.Engine()
             
-            # Create a temporary directory for extraction
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Extract all files from bundle
-                with tarfile.open(self.bundle_path, 'r:gz') as tar:
-                    for member in tar.getmembers():
-                        member.name = member.name.lstrip('/')
-                        tar.extract(member, temp_dir)
-                    if self._has_ctx:
-                        ctx.log.info(f"Extracted bundle contents to {temp_dir}")
+            # Load all .rego policy files from bundle directory
+            rego_files = list(self.bundle_path.glob("*.rego"))
+            if not rego_files:
+                raise FileNotFoundError(f"No .rego policy files found in {self.bundle_path}")
                 
-                # Load policy.wasm
-                wasm_path = Path(temp_dir) / "policy.wasm"
-                if not wasm_path.exists():
-                    raise FileNotFoundError(f"policy.wasm not found in bundle at {wasm_path}")
-                
-                # Load data.json if it exists
-                data_path = Path(temp_dir) / "data.json"
-                if data_path.exists():
-                    with open(data_path, 'r') as f:
-                        self.data = json.load(f)
-                    if self._has_ctx:
-                        ctx.log.info(f"Loaded data.json with {len(self.data)} keys")
-                
-                # Initialize OPA policy with WASM file
-                self.policy = OPAPolicy(str(wasm_path))
-                
-                # Set data if available
-                if self.data:
-                    self.policy.set_data(self.data)
+            for rego_file in rego_files:
+                if self._has_ctx:
+                    ctx.log.info(f"Loading policy file: {rego_file}")
+                self.engine.add_policy_from_file(str(rego_file))
+            
+            # Load data from YAML files
+            yaml_files = list(self.bundle_path.glob("*.yaml")) + list(self.bundle_path.glob("*.yml"))
+            for yaml_file in yaml_files:
+                if self._has_ctx:
+                    ctx.log.info(f"Loading data file: {yaml_file}")
+                with open(yaml_file, 'r') as f:
+                    yaml_data = yaml.safe_load(f)
+                    if yaml_data:
+                        self.engine.add_data(yaml_data)
+                        self.data.update(yaml_data)
+            
+            # Load data from JSON files  
+            json_files = list(self.bundle_path.glob("*.json"))
+            for json_file in json_files:
+                if self._has_ctx:
+                    ctx.log.info(f"Loading data file: {json_file}")
+                with open(json_file, 'r') as f:
+                    json_data = json.load(f)
+                    if json_data:
+                        self.engine.add_data(json_data)
+                        self.data.update(json_data)
                 
             if self._has_ctx:
-                ctx.log.info("OPA policy loaded successfully")
+                ctx.log.info(f"Regorus engine loaded successfully with {len(rego_files)} policies and {len(self.data)} data keys")
         except Exception as e:
             if self._has_ctx:
-                ctx.log.error(f"Failed to load OPA policy: {e}")
+                ctx.log.error(f"Failed to load Regorus policy: {e}")
             else:
-                print(f"Failed to load OPA policy: {e}")
+                print(f"Failed to load Regorus policy: {e}")
             sys.exit(1)
     
     def request(self, flow: http.HTTPFlow) -> None:
-        """Intercept and filter requests based on OPA policy"""
-        if not self.policy:
+        """Intercept and filter requests based on OPA policy using Regorus"""
+        if not self.engine:
             if self._has_ctx:
-                ctx.log.error("OPA policy not loaded")
+                ctx.log.error("Regorus engine not loaded")
             return
         
         # Prepare input for OPA
@@ -100,31 +104,21 @@ class OPAFilter:
         }
         
         try:
-            # Evaluate policy
-            result = self.policy.evaluate(opa_input)
+            # Set input for Regorus engine
+            self.engine.set_input(opa_input)
             
-            allowed = False
-            reason = "No decision from policy"
-            
-            if isinstance(result, list) and len(result) > 0:
-                if isinstance(result[0], dict) and 'result' in result[0]:
-                    policy_output = result[0]['result']
-                    if isinstance(policy_output, dict):
-                        allowed = policy_output.get('allow', False)
-                        reason = policy_output.get('reason', 'No reason provided')
-                    else:
-                        allowed = bool(policy_output)
-                else:
-                    allowed = bool(result[0])
-            elif isinstance(result, dict):
-                if "result" in result:
-                    allowed = bool(result["result"])
-                elif "allow" in result:
-                    allowed = result["allow"]
-                    reason = result.get("reason", "No reason provided")
+            # Evaluate the decision rule - try to get the structured decision first
+            try:
+                decision_result = self.engine.eval_rule("data.mitmproxy.policy.decision")
+                allowed = decision_result.get("allow", False)
+                reason = decision_result.get("reason", "No reason provided")
+            except:
+                # Fallback to simple allow rule
+                allowed = self.engine.eval_rule("data.mitmproxy.policy.allow")
+                reason = "Policy evaluation result"
             
             if self._has_ctx:
-                ctx.log.info(f"OPA decision for {flow.request.method} {flow.request.url}: "
+                ctx.log.info(f"Regorus decision for {flow.request.method} {flow.request.url}: "
                             f"allowed={allowed}, reason={reason}")
             
             if not allowed:
@@ -140,7 +134,7 @@ class OPAFilter:
         except Exception as e:
             # Security fix: Block traffic on policy evaluation errors (fail-closed)
             if self._has_ctx:
-                ctx.log.error(f"Error evaluating OPA policy: {e}")
+                ctx.log.error(f"Error evaluating Regorus policy: {e}")
                 ctx.log.error("Blocking request due to policy evaluation error")
             
             # Return 503 Service Unavailable when policy evaluation fails

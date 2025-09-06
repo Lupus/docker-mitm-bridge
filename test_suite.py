@@ -168,12 +168,12 @@ class TestSuite:
         test_script = """#!/bin/bash
 set -e
 
-# Install CA certificate
+# Install CA certificate (tools already pre-installed)
 echo "Installing CA certificate..."
-apt-get update -qq && apt-get install -y -qq curl ca-certificates > /dev/null 2>&1
-curl -sSL http://mitm-boundary-proxy:8080/ca.crt -o /tmp/mitmproxy-ca.crt
+curl -sSL --max-time 10 http://mitm-boundary-proxy:8080/ca.crt -o /tmp/mitmproxy-ca.crt
 cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/
 update-ca-certificates > /dev/null 2>&1
+echo "CA certificate installed successfully"
 
 # Test connectivity
 echo "Testing connectivity..."
@@ -236,8 +236,8 @@ fi
                 pass
                 
             container = self.client.containers.run(
-                "ubuntu:22.04",
-                command="sleep 30",
+                "mitm-test-container",
+                command="sleep 60",
                 network=self.network_name,
                 environment={
                     "HTTP_PROXY": f"http://{self.proxy_container}:8080",
@@ -252,20 +252,35 @@ fi
             
             # Copy and execute the test script
             container.put_archive('/', tar_stream.read())
-            exit_code, output = container.exec_run("/bin/bash /test_connectivity.sh")
+            
+            # Add debugging: check if container is still running
+            container.reload()
+            if container.status != 'running':
+                print(f"  ❌ Container stopped unexpectedly: {container.status}")
+                print(f"  Container logs: {container.logs().decode('utf-8')}")
+                return False
+                
+            print("  Executing connectivity tests...")
+            exit_code, output = container.exec_run("/bin/bash /test_connectivity.sh", workdir='/')
             
             print(output.decode('utf-8'))
             
-            # Clean up
-            container.stop(timeout=5)
-            container.remove()
-            
             if exit_code == 0:
                 print("  ✅ All connectivity tests passed")
-                return True
+                success = True
             else:
                 print("  ❌ Some connectivity tests failed")
-                return False
+                success = False
+                
+            # Clean up with timeout handling
+            try:
+                container.stop(timeout=3)
+                container.remove()
+            except Exception as cleanup_error:
+                print(f"  ⚠️  Container cleanup issue (not critical): {cleanup_error}")
+                # Don't fail the test for cleanup issues
+                
+            return success
             
         except docker.errors.ContainerError as e:
             print(f"  ❌ Connectivity test failed:")
@@ -401,8 +416,9 @@ fi
         results = []
         for name, test_func in tests:
             try:
-                # Apply timeout to each test (30 seconds per test)
-                with timeout(30):
+                # Apply timeout to each test (60 seconds for connectivity test, 30 for others)
+                test_timeout = 60 if name == "Connectivity Filtering" else 30
+                with timeout(test_timeout):
                     result = test_func()
                     results.append((name, result))
             except TimeoutError as e:

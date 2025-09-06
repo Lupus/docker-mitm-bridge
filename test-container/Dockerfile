@@ -1,9 +1,14 @@
+# Test container with all necessary tools pre-installed for isolated network testing
 FROM ubuntu:22.04
 
-RUN apt-get update && apt-get install -y \
+# Install all necessary tools in one layer for efficient testing
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     ca-certificates \
+    dnsutils \
+    netcat-openbsd \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /test
