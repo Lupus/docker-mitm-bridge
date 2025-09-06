@@ -15,8 +15,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Install maturin
 RUN pip install maturin
 
-# Clone and build Regorus Python bindings
-RUN git clone https://github.com/microsoft/regorus.git /tmp/regorus
+# Clone and build Regorus Python bindings from latest stable release
+RUN git clone --depth 1 --branch regorus-v0.5.0 https://github.com/microsoft/regorus.git /tmp/regorus
 WORKDIR /tmp/regorus/bindings/python
 RUN maturin build --release
 
