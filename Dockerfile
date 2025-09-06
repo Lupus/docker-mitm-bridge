@@ -1,5 +1,5 @@
 # Main stage - Python app with mitmproxy and OPA integration
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # Copy OPA binary from static image
 COPY --from=openpolicyagent/opa:latest-static /opa /usr/local/bin/opa
