@@ -60,3 +60,20 @@ unrestricted_domains:
   # Monitoring and telemetry
   - sentry.io
   - statsig.anthropic.com
+
+# GitHub access control configuration
+# GitHub users allowed to perform write operations (push)
+# Add usernames here to grant push access to all their repositories
+github_allowed_users:
+  # Example: Uncomment and add your GitHub username
+  # - "yourusername"
+  # - "teammember"
+
+# Specific GitHub repositories allowed for write operations
+# Format: "username/repository" or "organization/repository"
+# This allows granular per-repository access control
+github_allowed_repos:
+  # Example: Uncomment and add specific repositories
+  # - "yourusername/private-project"
+  # - "yourorg/critical-repo"
+  # - "opensource/contribution-target"
