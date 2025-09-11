@@ -25,6 +25,9 @@ build/
 *.swp
 *.swo
 
+# Configuration
+config.yaml
+
 # OS
 .DS_Store
 Thumbs.db
