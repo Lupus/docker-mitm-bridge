@@ -37,6 +37,9 @@ case "$OS" in
         fi
         # Copy certificate to the trusted store
         cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/mitmproxy-ca.crt
+        # Also copy to standard location for Node.js
+        mkdir -p /etc/ssl/certs
+        cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
         update-ca-certificates
         echo "CA certificate installed successfully"
         ;;
@@ -49,6 +52,9 @@ case "$OS" in
         fi
         # Copy certificate to the trusted store
         cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/mitmproxy-ca.crt
+        # Also copy to standard location for Node.js
+        mkdir -p /etc/ssl/certs
+        cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
         update-ca-certificates
         echo "CA certificate installed successfully"
         ;;
@@ -61,6 +67,9 @@ case "$OS" in
         fi
         # Copy certificate to the trusted store
         cp /tmp/mitmproxy-ca.crt /etc/pki/ca-trust/source/anchors/mitmproxy-ca.crt
+        # Also copy to standard location for Node.js
+        mkdir -p /etc/ssl/certs
+        cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
         update-ca-trust
         echo "CA certificate installed successfully"
         ;;
@@ -68,6 +77,9 @@ case "$OS" in
     *)
         echo "Unsupported OS: $OS"
         echo "Manual installation required. Certificate saved to /tmp/mitmproxy-ca.crt"
+        # Still create the Node.js certificate location
+        mkdir -p /etc/ssl/certs
+        cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
         echo ""
         echo "For manual installation:"
         echo "- Ubuntu/Debian: Copy to /usr/local/share/ca-certificates/ and run update-ca-certificates"
@@ -76,6 +88,10 @@ case "$OS" in
         exit 1
         ;;
 esac
+
+# Set Node.js CA certificate environment variable
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/mitmproxy-ca.pem
+echo "NODE_EXTRA_CA_CERTS set to: $NODE_EXTRA_CA_CERTS"
 
 # Clean up
 rm -f /tmp/mitmproxy-ca.crt
@@ -92,3 +108,4 @@ fi
 echo ""
 echo "CA certificate installation complete!"
 echo "HTTP_PROXY and HTTPS_PROXY should be set to: http://${PROXY_HOST}:${PROXY_PORT}"
+echo "NODE_EXTRA_CA_CERTS should be set to: /etc/ssl/certs/mitmproxy-ca.pem"

@@ -49,7 +49,7 @@ configure_shell_rc() {
     
     # Remove any existing proxy configurations
     if [ -f "$rc_file" ]; then
-        grep -v -E '^(export )?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy|NO_PROXY|no_proxy)=' "$rc_file" > "$temp_file" 2>/dev/null || true
+        grep -v -E '^(export )?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy|NO_PROXY|no_proxy|NODE_EXTRA_CA_CERTS)=' "$rc_file" > "$temp_file" 2>/dev/null || true
         cp "$temp_file" "$rc_file"
     fi
     
@@ -63,6 +63,7 @@ export http_proxy="$PROXY_URL"
 export https_proxy="$PROXY_URL"
 export NO_PROXY="localhost,127.0.0.1,$PROXY_HOST"
 export no_proxy="localhost,127.0.0.1,$PROXY_HOST"
+export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/mitmproxy-ca.pem"
 EOF
     
     rm -f "$temp_file"
@@ -92,6 +93,7 @@ if [ -n "$HOME" ]; then
     export https_proxy="$PROXY_URL"
     export NO_PROXY="localhost,127.0.0.1,$PROXY_HOST"
     export no_proxy="localhost,127.0.0.1,$PROXY_HOST"
+    export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/mitmproxy-ca.pem"
     echo "   ✓ Environment variables set for current session"
 else
     echo "   ⚠ Warning: HOME not set, skipping shell configuration"
@@ -134,12 +136,16 @@ case "$OS" in
             fi
         fi
         
-        # Copy certificate to the trusted store
+        # Copy certificate to the trusted store and Node.js location
         if [ -w /usr/local/share/ca-certificates/ ]; then
             cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/mitmproxy-ca.crt
+            mkdir -p /etc/ssl/certs
+            cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
             update-ca-certificates
         elif command -v sudo >/dev/null 2>&1; then
             sudo cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/mitmproxy-ca.crt
+            sudo mkdir -p /etc/ssl/certs
+            sudo cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
             sudo update-ca-certificates
         else
             echo "   ⚠ Warning: Cannot install system-wide, trying user-level installation"
@@ -165,9 +171,13 @@ case "$OS" in
         
         if [ -w /usr/local/share/ca-certificates/ ]; then
             cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/mitmproxy-ca.crt
+            mkdir -p /etc/ssl/certs
+            cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
             update-ca-certificates
         elif command -v sudo >/dev/null 2>&1; then
             sudo cp /tmp/mitmproxy-ca.crt /usr/local/share/ca-certificates/mitmproxy-ca.crt
+            sudo mkdir -p /etc/ssl/certs
+            sudo cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
             sudo update-ca-certificates
         fi
         echo "   ✓ CA certificate installed successfully"
@@ -187,9 +197,13 @@ case "$OS" in
         
         if [ -w /etc/pki/ca-trust/source/anchors/ ]; then
             cp /tmp/mitmproxy-ca.crt /etc/pki/ca-trust/source/anchors/mitmproxy-ca.crt
+            mkdir -p /etc/ssl/certs
+            cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
             update-ca-trust
         elif command -v sudo >/dev/null 2>&1; then
             sudo cp /tmp/mitmproxy-ca.crt /etc/pki/ca-trust/source/anchors/mitmproxy-ca.crt
+            sudo mkdir -p /etc/ssl/certs
+            sudo cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
             sudo update-ca-trust
         fi
         echo "   ✓ CA certificate installed successfully"
@@ -200,10 +214,21 @@ case "$OS" in
         mkdir -p ~/.local/share/ca-certificates
         cp /tmp/mitmproxy-ca.crt ~/.local/share/ca-certificates/
         
+        # Also try to create the standard Node.js location
+        if [ -w /etc/ssl/certs ] || command -v sudo >/dev/null 2>&1; then
+            if [ -w /etc/ssl/certs ]; then
+                mkdir -p /etc/ssl/certs
+                cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
+            else
+                sudo mkdir -p /etc/ssl/certs
+                sudo cp /tmp/mitmproxy-ca.crt /etc/ssl/certs/mitmproxy-ca.pem
+            fi
+        fi
+        
         # Set certificate environment variables
-        export SSL_CERT_FILE=/tmp/mitmproxy-ca.crt
-        export REQUESTS_CA_BUNDLE=/tmp/mitmproxy-ca.crt
-        export NODE_EXTRA_CA_CERTS=/tmp/mitmproxy-ca.crt
+        export SSL_CERT_FILE=/etc/ssl/certs/mitmproxy-ca.pem
+        export REQUESTS_CA_BUNDLE=/etc/ssl/certs/mitmproxy-ca.pem
+        export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/mitmproxy-ca.pem
         
         # Add to shell configuration
         if [ -n "$HOME" ]; then
@@ -212,9 +237,9 @@ case "$OS" in
                     cat >> "$rc_file" <<EOF
 
 # CA certificate configuration for mitmproxy
-export SSL_CERT_FILE=/tmp/mitmproxy-ca.crt
-export REQUESTS_CA_BUNDLE=/tmp/mitmproxy-ca.crt
-export NODE_EXTRA_CA_CERTS=/tmp/mitmproxy-ca.crt
+export SSL_CERT_FILE=/etc/ssl/certs/mitmproxy-ca.pem
+export REQUESTS_CA_BUNDLE=/etc/ssl/certs/mitmproxy-ca.pem
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/mitmproxy-ca.pem
 EOF
                 fi
             done
@@ -264,6 +289,7 @@ echo "Summary of changes:"
 echo "• APT configured to use proxy: $PROXY_URL"
 echo "• Shell environment configured with proxy variables"
 echo "• CA certificate installed and configured"
+echo "• NODE_EXTRA_CA_CERTS set to /etc/ssl/certs/mitmproxy-ca.pem"
 echo "• Current session environment variables set"
 echo ""
 echo "Note: For new shell sessions, proxy variables will be automatically loaded."
