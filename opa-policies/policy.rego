@@ -161,9 +161,18 @@ reason := "GitHub write access denied - user not authorized" if {
     not github_write_authorized
 }
 
+reason := "GitHub API access denied - only Git operations and GET/HEAD requests allowed" if {
+    is_github_request
+    not github_read_operation
+    not github_write_operation
+}
+
 reason := "Request allowed" if {
     allow
 }
+
+# Fallback reason if none of the above match
+default reason := "Request denied - policy evaluation failed"
 
 # Return detailed decision
 decision := {
