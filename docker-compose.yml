@@ -3,7 +3,7 @@ services:
     build: .
     container_name: mitm-boundary-proxy
     volumes:
-      - ./opa-policies:/app/bundle:ro
+      - ${OPA_POLICY_DIR:-./opa-policies}:/app/bundle:ro
       - mitmproxy-certs:/home/mitmproxy/.mitmproxy
     networks:
       - mitm-filtered

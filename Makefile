@@ -1,4 +1,4 @@
-.PHONY: help install test test-all test-idempotency clean init start stop status destroy
+.PHONY: help install test test-all test-idempotency clean init start stop restart rebuild status destroy
 
 help:
 	@echo "Docker MITM Bridge - Available Commands"
@@ -7,6 +7,8 @@ help:
 	@echo "  make init           - Initialize network and start proxy"
 	@echo "  make start          - Start the proxy"
 	@echo "  make stop           - Stop the proxy"
+	@echo "  make restart        - Restart the proxy (docker compose restart)"
+	@echo "  make rebuild        - Rebuild and redeploy with config changes"
 	@echo "  make status         - Show status"
 	@echo "  make destroy        - Remove everything"
 	@echo "  make test           - Run main test suite"
@@ -32,6 +34,14 @@ start: install
 stop: install
 	@echo "Stopping proxy..."
 	@. .venv/bin/activate && python docker-mitm-bridge stop
+
+restart: install
+	@. .venv/bin/activate && python docker-mitm-bridge restart
+
+rebuild: install
+	@echo "Rebuilding and redeploying with configuration changes..."
+	@. .venv/bin/activate && python docker-mitm-bridge stop
+	@. .venv/bin/activate && python docker-mitm-bridge start
 
 status: install
 	@. .venv/bin/activate && python docker-mitm-bridge status
