@@ -116,6 +116,29 @@ def stop():
 
 
 @cli.command()
+def restart():
+    """Restart the boundary proxy"""
+    config = load_config()
+    
+    pm = ProxyManager(container_name=config['proxy']['container_name'])
+    
+    # Check proxy status
+    status = pm.get_status()
+    if not status['exists']:
+        click.echo(click.style("✗ Proxy container does not exist. Run 'init' first.", fg="red"))
+        sys.exit(1)
+    
+    click.echo("Restarting proxy...")
+    result = pm.restart()
+    
+    if result['status'] == 'error':
+        click.echo(click.style(f"✗ {result['message']}", fg="red"))
+        sys.exit(1)
+    else:
+        click.echo(click.style(f"✓ {result['message']}", fg="green"))
+
+
+@cli.command()
 def destroy():
     """Stop proxy and remove network"""
     config = load_config()

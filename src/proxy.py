@@ -6,6 +6,7 @@ Proxy management for Docker MITM Bridge
 import docker
 import subprocess
 import os
+import yaml
 from typing import Dict, Any, Optional
 from pathlib import Path
 from validators import validate_container_name, ValidationError
@@ -20,6 +21,26 @@ class ProxyManager:
         self.client = docker.from_env()
         self.container_name = container_name
         self.compose_file = Path(__file__).parent.parent / "docker-compose.yml"
+        
+    def _load_config(self) -> Dict[str, Any]:
+        """Load configuration from config.yaml"""
+        config_path = self.compose_file.parent / "config.yaml"
+        if not config_path.exists():
+            return {}
+        
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    
+    def _prepare_environment(self) -> Dict[str, str]:
+        """Prepare environment variables for docker-compose"""
+        config = self._load_config()
+        env = os.environ.copy()
+        
+        # Set OPA policy directory from config
+        if config.get('opa', {}).get('policy_dir'):
+            env['OPA_POLICY_DIR'] = config['opa']['policy_dir']
+        
+        return env
         
     def container_exists(self) -> bool:
         """Check if the proxy container exists"""
@@ -42,10 +63,12 @@ class ProxyManager:
         try:
             # Change to project directory for docker-compose
             project_dir = self.compose_file.parent
+            env = self._prepare_environment()
             
             result = subprocess.run(
                 ["docker", "compose", "up", "-d", "--build"],
                 cwd=project_dir,
+                env=env,
                 capture_output=True,
                 text=True
             )
@@ -71,10 +94,12 @@ class ProxyManager:
         """Stop the proxy using docker-compose"""
         try:
             project_dir = self.compose_file.parent
+            env = self._prepare_environment()
             
             result = subprocess.run(
                 ["docker", "compose", "down"],
                 cwd=project_dir,
+                env=env,
                 capture_output=True,
                 text=True
             )
@@ -100,10 +125,12 @@ class ProxyManager:
         """Restart the proxy (useful for policy updates)"""
         try:
             project_dir = self.compose_file.parent
+            env = self._prepare_environment()
             
             result = subprocess.run(
                 ["docker", "compose", "restart"],
                 cwd=project_dir,
+                env=env,
                 capture_output=True,
                 text=True
             )
