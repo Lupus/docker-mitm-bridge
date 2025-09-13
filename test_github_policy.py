@@ -19,11 +19,13 @@ class GitHubPolicyTest:
         """Create temporary data file with test configuration"""
         test_data = f"""
 allowed_domains:
-  - github.com
-  - api.github.com
+  - gitlab.com
 
 unrestricted_domains:
   - api.anthropic.com
+
+# GitHub access control configuration
+github_read_access_enabled: true
 
 github_allowed_users:
 {chr(10).join([f'  - "{user}"' for user in github_users])}
@@ -68,6 +70,30 @@ github_allowed_repos:
             # Clean up input file
             os.unlink(input_file)
     
+    def create_test_data_disabled(self, github_users: List[str], github_repos: List[str]) -> str:
+        """Create temporary data file with GitHub read access disabled"""
+        test_data = f"""
+allowed_domains:
+  - gitlab.com
+
+unrestricted_domains:
+  - api.anthropic.com
+
+# GitHub access control configuration  
+github_read_access_enabled: false
+
+github_allowed_users:
+{chr(10).join([f'  - "{user}"' for user in github_users])}
+
+github_allowed_repos:
+{chr(10).join([f'  - "{repo}"' for repo in github_repos])}
+"""
+        
+        fd, temp_path = tempfile.mkstemp(suffix='.yml')
+        with os.fdopen(fd, 'w') as f:
+            f.write(test_data)
+        return temp_path
+
     def run_github_tests(self):
         """Run comprehensive GitHub policy tests"""
         print("🔍 Testing GitHub OPA Policy Logic...")
@@ -179,6 +205,32 @@ github_allowed_repos:
                     "expected": False
                 },
                 
+                # Real-world unauthorized scenarios from logs
+                {
+                    "name": "Microsoft VSCode repo access (unauthorized - from logs)",
+                    "input": {
+                        "request": {
+                            "host": "github.com",
+                            "method": "GET",
+                            "path": "/microsoft/vscode.git/info/refs",
+                            "query": "service=git-receive-pack"
+                        }
+                    },
+                    "expected": False
+                },
+                {
+                    "name": "Torvalds Linux repo access (unauthorized - from logs)",
+                    "input": {
+                        "request": {
+                            "host": "github.com",
+                            "method": "GET",
+                            "path": "/torvalds/linux.git/info/refs",
+                            "query": "service=git-receive-pack"
+                        }
+                    },
+                    "expected": False
+                },
+                
                 # API calls
                 {
                     "name": "GitHub API (GET)",
@@ -190,6 +242,17 @@ github_allowed_repos:
                         }
                     },
                     "expected": True
+                },
+                {
+                    "name": "GitHub GraphQL API (POST - should be denied)",
+                    "input": {
+                        "request": {
+                            "host": "api.github.com",
+                            "method": "POST",
+                            "path": "/graphql"
+                        }
+                    },
+                    "expected": False
                 },
                 
                 # Raw content
@@ -228,11 +291,67 @@ github_allowed_repos:
                 })
             
             print(f"\n📊 Results: {success_count}/{len(test_cases)} tests passed")
-            return success_count == len(test_cases)
+            all_passed = success_count == len(test_cases)
             
         finally:
             # Clean up temp file
             os.unlink(test_data_file)
+        
+        # Test with GitHub read access disabled
+        print("\n🔍 Testing with GitHub Read Access Disabled...")
+        test_data_disabled_file = self.create_test_data_disabled(
+            github_users=["testuser", "alloweduser"], 
+            github_repos=["org/specific-repo", "team/project"]
+        )
+        
+        try:
+            disabled_test_cases = [
+                {
+                    "name": "GitHub read access disabled - clone should fail",
+                    "input": {
+                        "request": {
+                            "host": "github.com",
+                            "method": "GET",
+                            "path": "/microsoft/vscode.git/info/refs",
+                            "query": "service=git-upload-pack"
+                        }
+                    },
+                    "expected": False
+                },
+                {
+                    "name": "GitHub read access disabled - authorized write should still work",
+                    "input": {
+                        "request": {
+                            "host": "github.com",
+                            "method": "POST",
+                            "path": "/org/specific-repo.git/git-receive-pack"
+                        }
+                    },
+                    "expected": True
+                }
+            ]
+            
+            disabled_success = 0
+            for test_case in disabled_test_cases:
+                result = self.test_opa_policy(test_case["input"], test_data_disabled_file)
+                passed = result["allow"] == test_case["expected"]
+                
+                status = "✅ PASS" if passed else "❌ FAIL"
+                print(f"{status} {test_case['name']}")
+                print(f"      Expected: {test_case['expected']}, Got: {result['allow']}")
+                print(f"      Reason: {result.get('reason', 'N/A')}")
+                
+                if passed:
+                    disabled_success += 1
+                    
+            print(f"\n📊 Disabled Access Tests: {disabled_success}/{len(disabled_test_cases)} tests passed")
+            disabled_passed = disabled_success == len(disabled_test_cases)
+            
+        finally:
+            # Clean up temp file
+            os.unlink(test_data_disabled_file)
+        
+        return all_passed and disabled_passed
 
 def main():
     """Run GitHub policy tests"""
