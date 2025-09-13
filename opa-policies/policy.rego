@@ -14,8 +14,10 @@ allow if {
 
 allow if {
     # Check if host is in allowed domains with GET/HEAD only
+    # But exclude GitHub requests which have their own authorization logic
     input.request.host in data.allowed_domains
     input.request.method in ["GET", "HEAD"]
+    not is_github_request
 }
 
 allow if {
@@ -45,8 +47,9 @@ host_is_known if {
 github_access_allowed if {
     # Check if this is a GitHub request
     is_github_request
-    # Allow read operations for all GitHub repos
+    # Allow read operations for all GitHub repos (if enabled)
     github_read_operation
+    data.github_read_access_enabled == true
 }
 
 github_access_allowed if {
@@ -84,7 +87,9 @@ github_read_operation if {
 
 github_read_operation if {
     # Allow general GET/HEAD requests to GitHub (for web interface, API, etc.)
+    # But exclude Git write operation discovery requests
     input.request.method in ["GET", "HEAD"]
+    not github_write_operation
 }
 
 # Detect Git write operations
@@ -161,18 +166,22 @@ reason := "GitHub write access denied - user not authorized" if {
     not github_write_authorized
 }
 
+reason := "GitHub read access disabled by configuration" if {
+    is_github_request
+    github_read_operation
+    data.github_read_access_enabled != true
+    not github_write_operation
+}
+
 reason := "GitHub API access denied - only Git operations and GET/HEAD requests allowed" if {
     is_github_request
     not github_read_operation
     not github_write_operation
 }
 
-reason := "Request allowed" if {
-    allow
-}
-
-# Fallback reason if none of the above match
-default reason := "Request denied - policy evaluation failed"
+# Default reason - will be "Request allowed" for allowed requests,
+# or specific denial reason for denied requests
+default reason := "Request allowed"
 
 # Return detailed decision
 decision := {

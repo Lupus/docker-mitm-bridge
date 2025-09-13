@@ -22,10 +22,6 @@ allowed_domains:
   - index.crates.io
   
   # Development tools
-  - github.com
-  - api.github.com
-  - raw.githubusercontent.com
-  - objects.githubusercontent.com
   - gitlab.com
   
   # Ubuntu package repositories
@@ -62,6 +58,11 @@ unrestricted_domains:
   - statsig.anthropic.com
 
 # GitHub access control configuration
+# Enable/disable GitHub read access globally
+# When enabled, allows clone/fetch operations from any GitHub repository
+# When disabled, all GitHub access is blocked unless explicitly allowed
+github_read_access_enabled: true
+
 # GitHub users allowed to perform write operations (push)
 # Add usernames here to grant push access to all their repositories
 github_allowed_users:
