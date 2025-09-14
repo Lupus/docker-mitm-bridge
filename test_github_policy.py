@@ -114,7 +114,7 @@ github_allowed_repos:
                             "host": "github.com",
                             "method": "GET",
                             "path": "/testuser/repo.git/info/refs",
-                            "query": "service=git-upload-pack"
+                            "query": {"service": "git-upload-pack"}
                         }
                     },
                     "expected": True
@@ -150,7 +150,7 @@ github_allowed_repos:
                             "host": "github.com",
                             "method": "GET",
                             "path": "/testuser/repo.git/info/refs",
-                            "query": "service=git-receive-pack"
+                            "query": {"service": "git-receive-pack"}
                         }
                     },
                     "expected": True
@@ -199,7 +199,7 @@ github_allowed_repos:
                             "host": "github.com",
                             "method": "GET",
                             "path": "/baduser/repo.git/info/refs",
-                            "query": "service=git-receive-pack"
+                            "query": {"service": "git-receive-pack"}
                         }
                     },
                     "expected": False
@@ -213,7 +213,7 @@ github_allowed_repos:
                             "host": "github.com",
                             "method": "GET",
                             "path": "/microsoft/vscode.git/info/refs",
-                            "query": "service=git-receive-pack"
+                            "query": {"service": "git-receive-pack"}
                         }
                     },
                     "expected": False
@@ -225,7 +225,7 @@ github_allowed_repos:
                             "host": "github.com",
                             "method": "GET",
                             "path": "/torvalds/linux.git/info/refs",
-                            "query": "service=git-receive-pack"
+                            "query": {"service": "git-receive-pack"}
                         }
                     },
                     "expected": False
@@ -313,7 +313,7 @@ github_allowed_repos:
                             "host": "github.com",
                             "method": "GET",
                             "path": "/microsoft/vscode.git/info/refs",
-                            "query": "service=git-upload-pack"
+                            "query": {"service": "git-upload-pack"}
                         }
                     },
                     "expected": False

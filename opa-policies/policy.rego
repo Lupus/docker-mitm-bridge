@@ -77,7 +77,7 @@ is_github_request if {
 github_read_operation if {
     input.request.method == "GET"
     contains(input.request.path, "/info/refs")
-    contains(input.request.query, "service=git-upload-pack")
+    input.request.query.service == "git-upload-pack"
 }
 
 github_read_operation if {
@@ -96,7 +96,7 @@ github_read_operation if {
 github_write_operation if {
     input.request.method == "GET"
     contains(input.request.path, "/info/refs")
-    contains(input.request.query, "service=git-receive-pack")
+    input.request.query.service == "git-receive-pack"
 }
 
 github_write_operation if {
