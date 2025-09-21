@@ -1,0 +1,99 @@
+{{- if .Values.intercept.github.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: intercept-github-cert
+  namespace: {{ .Values.namespace.secrets }}
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: certificate
+    intercept.domain: github
+spec:
+  secretName: intercept-github-tls
+  issuerRef:
+    name: intercept-ca-issuer
+    kind: ClusterIssuer
+  commonName: github.com
+  dnsNames:
+  {{- range .Values.intercept.github.domains }}
+    - {{ . | quote }}
+  {{- end }}
+  duration: {{ .Values.certificates.duration }}
+  renewBefore: {{ .Values.certificates.renewBefore }}
+{{- end }}
+
+{{- if .Values.intercept.aws.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: intercept-aws-cert
+  namespace: {{ .Values.namespace.secrets }}
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: certificate
+    intercept.domain: aws
+spec:
+  secretName: intercept-aws-tls
+  issuerRef:
+    name: intercept-ca-issuer
+    kind: ClusterIssuer
+  commonName: amazonaws.com
+  dnsNames:
+  {{- range .Values.intercept.aws.domains }}
+    - {{ . | quote }}
+  {{- end }}
+  duration: {{ .Values.certificates.duration }}
+  renewBefore: {{ .Values.certificates.renewBefore }}
+{{- end }}
+
+{{- if .Values.intercept.google.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: intercept-google-cert
+  namespace: {{ .Values.namespace.secrets }}
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: certificate
+    intercept.domain: google
+spec:
+  secretName: intercept-google-tls
+  issuerRef:
+    name: intercept-ca-issuer
+    kind: ClusterIssuer
+  commonName: googleapis.com
+  dnsNames:
+  {{- range .Values.intercept.google.domains }}
+    - {{ . | quote }}
+  {{- end }}
+  duration: {{ .Values.certificates.duration }}
+  renewBefore: {{ .Values.certificates.renewBefore }}
+{{- end }}
+
+{{- if .Values.intercept.custom.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: intercept-custom-cert
+  namespace: {{ .Values.namespace.secrets }}
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: certificate
+    intercept.domain: custom
+spec:
+  secretName: intercept-custom-tls
+  issuerRef:
+    name: intercept-ca-issuer
+    kind: ClusterIssuer
+  commonName: {{ index .Values.intercept.custom.domains 0 | default "custom.local" }}
+  dnsNames:
+  {{- range .Values.intercept.custom.domains }}
+    - {{ . | quote }}
+  {{- end }}
+  duration: {{ .Values.certificates.duration }}
+  renewBefore: {{ .Values.certificates.renewBefore }}
+{{- end }}

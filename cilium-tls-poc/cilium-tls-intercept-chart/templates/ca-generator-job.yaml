@@ -1,0 +1,119 @@
+{{- if .Values.ca.generate }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: intercept-ca-generator-script
+  namespace: cert-manager
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  generate-ca.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Generating CA key and certificate..."
+    openssl genrsa -out /tmp/ca.key 4096
+    openssl req -x509 -new -nodes -key /tmp/ca.key -sha256 -days {{ .Values.ca.validity }} \
+      -out /tmp/ca.crt \
+      -subj "/C={{ .Values.ca.subject.country }}/ST={{ .Values.ca.subject.state }}/O={{ .Values.ca.subject.organization }}/CN={{ .Values.ca.subject.commonName }}"
+
+    echo "Creating/updating secret..."
+    kubectl create secret tls intercept-ca \
+      --cert=/tmp/ca.crt \
+      --key=/tmp/ca.key \
+      --namespace=cert-manager \
+      --dry-run=client -o yaml | kubectl apply -f -
+
+    echo "CA secret created/updated successfully"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: intercept-ca-generator-{{ .Release.Revision }}
+  namespace: cert-manager
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        {{ include "cilium-tls-intercept.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ca-generator
+    spec:
+      restartPolicy: Never
+      serviceAccountName: intercept-ca-generator
+      containers:
+      - name: ca-generator
+        image: bitnami/kubectl:latest
+        command: ["/bin/bash", "/scripts/generate-ca.sh"]
+        volumeMounts:
+        - name: script
+          mountPath: /scripts
+      volumes:
+      - name: script
+        configMap:
+          name: intercept-ca-generator-script
+          defaultMode: 0755
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: intercept-ca-generator
+  namespace: cert-manager
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: intercept-ca-generator
+  namespace: cert-manager
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create", "get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: intercept-ca-generator
+  namespace: cert-manager
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: intercept-ca-generator
+subjects:
+- kind: ServiceAccount
+  name: intercept-ca-generator
+  namespace: cert-manager
+{{- end }}

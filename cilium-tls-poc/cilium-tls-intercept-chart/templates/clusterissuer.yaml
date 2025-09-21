@@ -1,0 +1,11 @@
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: intercept-ca-issuer
+  labels:
+    {{ include "cilium-tls-intercept.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cert-issuer
+spec:
+  ca:
+    secretName: intercept-ca
