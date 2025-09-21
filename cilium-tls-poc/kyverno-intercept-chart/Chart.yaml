@@ -1,0 +1,15 @@
+apiVersion: v2
+name: kyverno-intercept
+description: A Helm chart for Kyverno-based TLS interception with Envoy sidecars
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - kyverno
+  - envoy
+  - tls-interception
+  - mitm
+  - proxy
+maintainers:
+  - name: Example
+    email: example@example.com

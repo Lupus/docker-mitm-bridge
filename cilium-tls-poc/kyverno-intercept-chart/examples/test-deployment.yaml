@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  namespace: kyverno-intercept
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+        intercept-proxy/enabled: "true"
+    spec:
+      containers:
+      - name: test-container
+        image: curlimages/curl:latest
+        command: ["sleep", "3600"]

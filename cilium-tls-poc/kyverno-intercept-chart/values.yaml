@@ -1,0 +1,139 @@
+# Default values for kyverno-intercept chart
+
+# Namespace configuration
+namespace: kyverno-intercept
+
+# Internal CA configuration
+ca:
+  # Generate CA on installation
+  generate: true
+  # CA validity in days
+  validity: 3650
+  subject:
+    country: US
+    state: CA
+    organization: Internal-CA
+    commonName: Kyverno-Intercept-CA
+
+# Domains to intercept - these will have certificates pre-generated
+interceptDomains:
+  github:
+    enabled: true
+    domains:
+      - "github.com"
+      - "api.github.com"
+      - "raw.githubusercontent.com"
+
+  aws:
+    enabled: true
+    domains:
+      - "s3.amazonaws.com"
+      - "ec2.amazonaws.com"
+      - "sts.amazonaws.com"
+
+  google:
+    enabled: false
+    domains:
+      - "googleapis.com"
+      - "storage.googleapis.com"
+
+# Certificate configuration
+certificates:
+  duration: 8760h  # 1 year
+  renewBefore: 720h  # 30 days before expiry
+
+# Envoy proxy configuration
+envoy:
+  image: envoyproxy/envoy:v1.28-latest
+  resources:
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+  port: 8080
+  adminPort: 9901
+  logLevel: info
+
+# OPA sidecar configuration
+opa:
+  enabled: true
+  image: openpolicyagent/opa:latest-envoy
+  resources:
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+  port: 8181
+
+  # OPA policy configuration (imported from docker-mitm-bridge)
+  policy:
+    # Domains with restricted access (only GET/HEAD allowed)
+    allowedDomains:
+      - github.com
+      - api.github.com
+      - raw.githubusercontent.com
+      - pypi.org
+      - files.pythonhosted.org
+      - registry.npmjs.org
+      - crates.io
+      - archive.ubuntu.com
+      - deb.debian.org
+
+    # Domains with unrestricted access (all HTTP methods)
+    unrestrictedDomains:
+      - api.anthropic.com
+      - api.openai.com
+
+    # GitHub-specific configuration
+    githubReadAccessEnabled: true
+    githubAllowedUsers: []
+    githubAllowedRepos:
+      - "Lupus/circuitry-cad"
+
+# Init container configuration
+initContainer:
+  image: nicolaka/netshoot:latest
+  # iptables rules configuration
+  redirectPorts:
+    - 80
+    - 443
+  excludeCIDRs:
+    - "127.0.0.1/32"
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+# Kyverno policy configuration
+kyverno:
+  # Annotation to trigger sidecar injection
+  annotationKey: "intercept-proxy/enabled"
+  annotationValue: "true"
+
+  # Whether to inject environment variables
+  injectEnvVars: false
+  envVars:
+    HTTP_PROXY: "http://localhost:8080"
+    HTTPS_PROXY: "http://localhost:8080"
+    NO_PROXY: "localhost,127.0.0.1,10.0.0.0/8,.cluster.local"
+
+# Test workload configuration
+testWorkload:
+  enabled: true
+  name: intercept-test
+  image: curlimages/curl:latest
+  replicas: 1
+
+# Monitoring and observability
+monitoring:
+  enabled: false
+  prometheus:
+    enabled: false
+    port: 9090
+
+# Cleanup hook configuration
+cleanup:
+  enabled: true

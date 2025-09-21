@@ -1,0 +1,111 @@
+{{- if .Values.opa.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-opa-policy
+  namespace: {{ .Values.namespace }}
+data:
+  policy.rego: |
+    package intercept
+
+    import future.keywords.if
+    import future.keywords.in
+
+    default allow = false
+
+    # Parse the incoming request
+    http_request := input.attributes.request.http
+
+    # Extract request details
+    method := http_request.method
+    host := http_request.headers.host
+    path := http_request.path
+
+    # Check if domain is in allowed list (restricted to GET/HEAD)
+    allow if {
+      host in data.allowed_domains
+      method in ["GET", "HEAD"]
+    }
+
+    # Check if domain is in unrestricted list (all methods allowed)
+    allow if {
+      host in data.unrestricted_domains
+    }
+
+    # GitHub-specific rules
+    allow if {
+      data.github_read_access_enabled
+      contains(host, "github")
+      method in ["GET", "HEAD"]
+    }
+
+    # GitHub write access for specific users/repos
+    allow if {
+      contains(host, "github")
+      method in ["POST", "PUT", "PATCH", "DELETE"]
+      github_write_allowed
+    }
+
+    github_write_allowed if {
+      # Extract repo from path (e.g., /repos/owner/repo/...)
+      regex.match("^/repos/([^/]+/[^/]+)", path)
+      repo := regex.find_all_string_submatch_n("^/repos/([^/]+/[^/]+)", path, 1)[0][1]
+      repo in data.github_allowed_repos
+    }
+
+    github_write_allowed if {
+      # Extract user from path
+      regex.match("^/users/([^/]+)", path)
+      user := regex.find_all_string_submatch_n("^/users/([^/]+)", path, 1)[0][1]
+      user in data.github_allowed_users
+    }
+
+  data.yml: |
+    # Domains with restricted access (only GET/HEAD allowed)
+    allowed_domains:
+    {{- range .Values.opa.policy.allowedDomains }}
+      - {{ . | quote }}
+    {{- end }}
+
+    # Domains with unrestricted access (all HTTP methods allowed)
+    unrestricted_domains:
+    {{- range .Values.opa.policy.unrestrictedDomains }}
+      - {{ . | quote }}
+    {{- end }}
+
+    # GitHub access control configuration
+    github_read_access_enabled: {{ .Values.opa.policy.githubReadAccessEnabled }}
+
+    # GitHub users allowed to perform write operations
+    github_allowed_users:
+    {{- range .Values.opa.policy.githubAllowedUsers }}
+      - {{ . | quote }}
+    {{- end }}
+
+    # Specific GitHub repositories allowed for write operations
+    github_allowed_repos:
+    {{- range .Values.opa.policy.githubAllowedRepos }}
+      - {{ . | quote }}
+    {{- end }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-opa-config
+  namespace: {{ .Values.namespace }}
+data:
+  config.yaml: |
+    plugins:
+      envoy_ext_authz_grpc:
+        addr: :9191
+        path: intercept/allow
+        dry_run: false
+        enable_reflection: true
+
+    decision_logs:
+      console: true
+
+    status:
+      console: true
+{{- end }}

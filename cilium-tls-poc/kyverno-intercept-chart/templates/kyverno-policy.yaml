@@ -1,0 +1,292 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-inject-proxy
+spec:
+  background: false
+  validationFailureAction: Audit
+  rules:
+  # Inject init container
+  - name: inject-init-container
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          initContainers:
+          - name: proxy-init
+            image: {{ .Values.initContainer.image }}
+            imagePullPolicy: IfNotPresent
+            securityContext:
+              capabilities:
+                add:
+                - NET_ADMIN
+                - NET_RAW
+              runAsNonRoot: false
+              runAsUser: 0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -ex
+
+              # Install CA certificate to system store
+              echo "Installing CA certificate..."
+              cp /ca-bundle/ca.crt /usr/local/share/ca-certificates/intercept-ca.crt
+              update-ca-certificates
+
+              # Also copy to shared volume for other containers
+              cp /ca-bundle/ca.crt /shared-ca-certs/intercept-ca.crt
+              # Merge with system certificates
+              cat /etc/ssl/certs/ca-certificates.crt /ca-bundle/ca.crt > /shared-ca-certs/ca-certificates.crt 2>/dev/null || true
+
+              # Setup iptables rules for traffic interception
+              echo "Setting up iptables rules..."
+
+              # Create new chain for proxy redirection
+              iptables -t nat -N PROXY_REDIRECT 2>/dev/null || true
+              iptables -t nat -F PROXY_REDIRECT
+
+              # Skip localhost traffic
+              {{- range .Values.initContainer.excludeCIDRs }}
+              iptables -t nat -A PROXY_REDIRECT -d {{ . }} -j RETURN
+              {{- end }}
+
+              # Redirect HTTP/HTTPS traffic to Envoy
+              {{- range .Values.initContainer.redirectPorts }}
+              iptables -t nat -A PROXY_REDIRECT -p tcp --dport {{ . }} -j REDIRECT --to-port {{ $.Values.envoy.port }}
+              {{- end }}
+
+              # Apply redirect chain to OUTPUT
+              iptables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
+
+              # List rules for debugging
+              echo "iptables rules applied:"
+              iptables -t nat -L -v -n
+
+              echo "Init container completed successfully!"
+            volumeMounts:
+            - name: ca-bundle
+              mountPath: /ca-bundle
+              readOnly: true
+            - name: ca-certificates
+              mountPath: /shared-ca-certs
+
+  # Inject Envoy sidecar
+  - name: inject-envoy-sidecar
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          containers:
+          - name: envoy-proxy
+            image: {{ .Values.envoy.image }}
+            imagePullPolicy: IfNotPresent
+            args:
+            - "-c"
+            - "/etc/envoy/config/envoy.yaml"
+            - "--log-level"
+            - "{{ .Values.envoy.logLevel }}"
+            ports:
+            - name: proxy
+              containerPort: {{ .Values.envoy.port }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ .Values.envoy.adminPort }}
+              protocol: TCP
+            resources:
+              {{- toYaml .Values.envoy.resources | nindent 14 }}
+            volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/config
+              readOnly: true
+            {{- range $group, $config := .Values.interceptDomains }}
+            {{- if $config.enabled }}
+            {{- range $domain := $config.domains }}
+            {{- $domainSanitized := $domain | replace "*" "-wildcard-" | replace "." "-" }}
+            - name: cert-{{ $domainSanitized }}
+              mountPath: /etc/envoy/certs/{{ $domainSanitized | replace "*" "wildcard" }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            - name: ca-certificates-system
+              mountPath: /etc/ssl/certs
+              readOnly: true
+            livenessProbe:
+              httpGet:
+                path: /ready
+                port: admin
+              initialDelaySeconds: 10
+              periodSeconds: 5
+            readinessProbe:
+              httpGet:
+                path: /ready
+                port: admin
+              initialDelaySeconds: 5
+              periodSeconds: 5
+
+          {{- if .Values.opa.enabled }}
+          - name: opa-sidecar
+            image: {{ .Values.opa.image }}
+            imagePullPolicy: IfNotPresent
+            args:
+            - "run"
+            - "--server"
+            - "--config-file=/config/config.yaml"
+            - "/policies/policy.rego"
+            - "/policies/data.yml"
+            ports:
+            - name: opa
+              containerPort: {{ .Values.opa.port }}
+              protocol: TCP
+            - name: opa-grpc
+              containerPort: 9191
+              protocol: TCP
+            resources:
+              {{- toYaml .Values.opa.resources | nindent 14 }}
+            volumeMounts:
+            - name: opa-policy
+              mountPath: /policies
+              readOnly: true
+            - name: opa-config
+              mountPath: /config
+              readOnly: true
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8181
+              initialDelaySeconds: 10
+              periodSeconds: 5
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8181
+              initialDelaySeconds: 5
+              periodSeconds: 5
+          {{- end }}
+
+  # Inject volumes
+  - name: inject-volumes
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          volumes:
+          - name: ca-bundle
+            configMap:
+              name: {{ .Release.Name }}-ca-bundle
+          - name: ca-certificates
+            emptyDir: {}
+          - name: ca-certificates-system
+            hostPath:
+              path: /etc/ssl/certs
+              type: Directory
+          - name: envoy-config
+            configMap:
+              name: {{ .Release.Name }}-envoy-config
+          {{- if .Values.opa.enabled }}
+          - name: opa-policy
+            configMap:
+              name: {{ .Release.Name }}-opa-policy
+          - name: opa-config
+            configMap:
+              name: {{ .Release.Name }}-opa-config
+          {{- end }}
+          {{- range $group, $config := .Values.interceptDomains }}
+          {{- if $config.enabled }}
+          {{- range $domain := $config.domains }}
+          {{- $domainSanitized := $domain | replace "*" "-wildcard-" | replace "." "-" }}
+          - name: cert-{{ $domainSanitized }}
+            secret:
+              secretName: {{ $.Release.Name }}-cert-{{ $domainSanitized }}
+              defaultMode: 0644
+          {{- end }}
+          {{- end }}
+          {{- end }}
+
+  # Inject CA certificates into all containers
+  - name: inject-ca-certs
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      foreach:
+      - list: "request.object.spec.containers[]"
+        patchStrategicMerge:
+          spec:
+            containers:
+            - name: "{{ `{{ element.name }}` }}"
+              env:
+              - name: SSL_CERT_FILE
+                value: "/etc/ssl/certs/ca-certificates.crt"
+              - name: CA_BUNDLE
+                value: "/etc/ssl/certs/ca-certificates.crt"
+              - name: CURL_CA_BUNDLE
+                value: "/etc/ssl/certs/ca-certificates.crt"
+              - name: REQUESTS_CA_BUNDLE
+                value: "/etc/ssl/certs/ca-certificates.crt"
+              - name: NODE_EXTRA_CA_CERTS
+                value: "/etc/ssl/certs/intercept-ca.crt"
+              volumeMounts:
+              - name: ca-certificates
+                mountPath: /etc/ssl/certs
+                readOnly: true
+
+  {{- if .Values.kyverno.injectEnvVars }}
+  # Inject environment variables into all containers
+  - name: inject-proxy-env-vars
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      foreach:
+      - list: "request.object.spec.containers[]"
+        patchStrategicMerge:
+          spec:
+            containers:
+            - name: "{{ `{{ element.name }}` }}"
+              env:
+              - name: HTTP_PROXY
+                value: {{ .Values.kyverno.envVars.HTTP_PROXY | quote }}
+              - name: HTTPS_PROXY
+                value: {{ .Values.kyverno.envVars.HTTPS_PROXY | quote }}
+              - name: NO_PROXY
+                value: {{ .Values.kyverno.envVars.NO_PROXY | quote }}
+              - name: SSL_CERT_FILE
+                value: "/usr/local/share/ca-certificates/intercept-ca.crt"
+              volumeMounts:
+              - name: ca-certificates
+                mountPath: /usr/local/share/ca-certificates
+                readOnly: true
+  {{- end }}

@@ -1,0 +1,168 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-envoy-config
+  namespace: {{ .Values.namespace }}
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: {{ .Values.envoy.adminPort }}
+
+    static_resources:
+      listeners:
+      - name: http_listener
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: {{ .Values.envoy.port }}
+        listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+        filter_chains:
+        # Default filter chain for unmatched traffic (forward as-is)
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: tcp_proxy
+              cluster: dynamic_forward_proxy_cluster
+
+        {{- range $group, $config := .Values.interceptDomains }}
+        {{- if $config.enabled }}
+        {{- range $domain := $config.domains }}
+        {{- $domainSanitized := $domain | replace "*" "wildcard" | replace "." "-" }}
+        # Filter chain for {{ $domain }}
+        - filter_chain_match:
+            server_names:
+            - "{{ $domain }}"
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                - certificate_chain:
+                    filename: "/etc/envoy/certs/{{ $domainSanitized }}/tls.crt"
+                  private_key:
+                    filename: "/etc/envoy/certs/{{ $domainSanitized }}/tls.key"
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: {{ $domainSanitized }}
+              codec_type: AUTO
+              route_config:
+                name: {{ $domain }}_route
+                virtual_hosts:
+                - name: {{ $domain }}_vhost
+                  domains:
+                  - "{{ $domain }}"
+                  routes:
+                  - match:
+                      prefix: "/"
+                    route:
+                      cluster: {{ $domainSanitized }}_cluster
+                      timeout: 30s
+              http_filters:
+              {{- if $.Values.opa.enabled }}
+              - name: envoy.ext_authz
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                  transport_api_version: V3
+                  with_request_body:
+                    max_request_bytes: 8192
+                    allow_partial_message: true
+                  grpc_service:
+                    envoy_grpc:
+                      cluster_name: opa_cluster
+                    timeout: 1s
+                  include_peer_certificate: false
+              {{- end }}
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        {{- end }}
+        {{- end }}
+        {{- end }}
+
+      clusters:
+      # Dynamic forward proxy cluster for non-intercepted traffic
+      - name: dynamic_forward_proxy_cluster
+        connect_timeout: 10s
+        lb_policy: CLUSTER_PROVIDED
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: dynamic_forward_proxy_cache_config
+              dns_lookup_family: V4_ONLY
+              max_hosts: 100
+
+      {{- if .Values.opa.enabled }}
+      # OPA cluster for authorization (gRPC)
+      - name: opa_cluster
+        connect_timeout: 1s
+        type: STATIC
+        lb_policy: ROUND_ROBIN
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config:
+              http2_protocol_options: {}
+        load_assignment:
+          cluster_name: opa_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 9191
+      {{- end }}
+
+      {{- range $group, $config := .Values.interceptDomains }}
+      {{- if $config.enabled }}
+      {{- range $domain := $config.domains }}
+      {{- $domainSanitized := $domain | replace "*" "wildcard" | replace "." "-" }}
+      # Upstream cluster for {{ $domain }}
+      - name: {{ $domainSanitized }}_cluster
+        connect_timeout: 10s
+        type: LOGICAL_DNS
+        dns_lookup_family: V4_ONLY
+        lb_policy: ROUND_ROBIN
+        load_assignment:
+          cluster_name: {{ $domainSanitized }}_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: {{ $domain | replace "*." "" }}
+                    port_value: 443
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: {{ $domain | replace "*." "" }}
+            common_tls_context:
+              validation_context:
+                trusted_ca:
+                  filename: "/etc/ssl/certs/ca-certificates.crt"
+      {{- end }}
+      {{- end }}
+      {{- end }}
+
+    layered_runtime:
+      layers:
+      - name: static_layer
+        static_layer:
+          envoy:
+            resource_limits:
+              listener:
+                http_listener:
+                  connection_limit: 10000
