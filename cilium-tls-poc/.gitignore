@@ -1,0 +1,11 @@
+# Generated CA files
+ca.key
+ca.crt
+
+# Helm package files
+*.tgz
+
+# Temporary files
+*.tmp
+*~
+.DS_Store

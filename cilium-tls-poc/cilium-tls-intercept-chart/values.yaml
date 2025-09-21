@@ -1,0 +1,75 @@
+# Default values for cilium-tls-intercept
+
+# Namespace where secrets will be stored
+namespace:
+  secrets: intercept-secrets
+  workload: intercept-workload
+
+# Internal CA configuration
+ca:
+  # Set to false if you want to provide your own CA
+  generate: true
+  # CA certificate validity in days
+  validity: 3650
+  # CA subject details
+  subject:
+    country: US
+    state: State
+    organization: Intercept-CA
+    commonName: Intercept-Internal-CA
+
+# Domains to intercept - organized by service type
+intercept:
+  github:
+    enabled: true
+    domains:
+      - "github.com"
+      - "*.github.com"
+      - "api.github.com"
+      - "raw.githubusercontent.com"
+      - "*.githubusercontent.com"
+
+  aws:
+    enabled: true
+    domains:
+      - "*.amazonaws.com"
+      - "*.s3.amazonaws.com"
+      - "*.ec2.amazonaws.com"
+
+  google:
+    enabled: true
+    domains:
+      - "*.googleapis.com"
+      - "*.google.com"
+
+  custom:
+    enabled: false
+    domains: []
+
+# Certificate configuration
+certificates:
+  duration: 8760h  # 1 year
+  renewBefore: 720h  # Renew 30 days before expiry
+
+# Test workload configuration
+testWorkload:
+  enabled: true
+  image: curlimages/curl:latest
+  name: intercept-test-pod
+
+# Cilium policy configuration
+ciliumPolicy:
+  enabled: true
+  # Add specific HTTP rules for allowed paths
+  githubRules:
+    - method: GET
+      path: "/repos/.*"
+    - method: POST
+      path: "/api/v3/.*"
+
+# Upstream CA bundle source
+upstreamCA:
+  # Options: "system" (copy from host), "custom" (provide your own)
+  source: "system"
+  # Path to CA bundle file if source is "system"
+  systemPath: "/etc/ssl/certs/ca-certificates.crt"
