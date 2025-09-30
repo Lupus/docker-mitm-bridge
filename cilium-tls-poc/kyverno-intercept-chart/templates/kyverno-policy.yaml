@@ -146,6 +146,7 @@ spec:
             args:
             - "run"
             - "--server"
+            - "--addr=0.0.0.0:8181"
             - "--config-file=/config/config.yaml"
             - "/policies/policy.rego"
             - "/policies/data.yml"
