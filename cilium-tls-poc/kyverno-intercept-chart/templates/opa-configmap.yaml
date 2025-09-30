@@ -18,7 +18,8 @@ data:
 
     # Extract request details
     method := http_request.method
-    host := http_request.headers.host
+    # Use host field directly, or fall back to :authority header
+    host := http_request.host
     path := http_request.path
 
     # Check if domain is in allowed list (restricted to GET/HEAD)
@@ -96,6 +97,9 @@ metadata:
   namespace: {{ .Values.namespace }}
 data:
   config.yaml: |
+    telemetry:
+      reporting_disabled: true
+
     plugins:
       envoy_ext_authz_grpc:
         addr: :9191
