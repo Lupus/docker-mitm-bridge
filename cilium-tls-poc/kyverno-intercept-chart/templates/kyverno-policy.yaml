@@ -49,28 +49,80 @@ spec:
               # Setup iptables rules for traffic interception
               echo "Setting up iptables rules..."
 
-              # Create new chain for proxy redirection
+              ENVOY_UID={{ .Values.envoy.uid }}
+              OPA_UID={{ .Values.opa.uid }}
+              ENVOY_PROXY_PORT={{ .Values.envoy.port }}
+
+              # ============================================
+              # NAT table - Traffic redirection
+              # ============================================
               iptables -t nat -N PROXY_REDIRECT 2>/dev/null || true
               iptables -t nat -F PROXY_REDIRECT
 
-              # Skip localhost traffic
-              {{- range .Values.initContainer.excludeCIDRs }}
-              iptables -t nat -A PROXY_REDIRECT -d {{ . }} -j RETURN
-              {{- end }}
+              # CRITICAL: Exclude sidecar traffic to prevent infinite loops
+              iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN
+              iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN
 
               # Redirect HTTP/HTTPS traffic to Envoy
               {{- range .Values.initContainer.redirectPorts }}
-              iptables -t nat -A PROXY_REDIRECT -p tcp --dport {{ . }} -j REDIRECT --to-port {{ $.Values.envoy.port }}
+              iptables -t nat -A PROXY_REDIRECT -p tcp --dport {{ . }} -j REDIRECT --to-port ${ENVOY_PROXY_PORT}
               {{- end }}
 
-              # Apply redirect chain to OUTPUT
+              # Apply redirection
               iptables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
+
+              # ============================================
+              # FILTER table - Port isolation
+              # ============================================
+              iptables -t filter -N SIDECAR_ISOLATE 2>/dev/null || true
+              iptables -t filter -F SIDECAR_ISOLATE
+
+              # Allow all traffic from Envoy/OPA sidecars (UIDs {{ .Values.envoy.uid }} and {{ .Values.opa.uid }})
+              iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT
+              iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT
+
+              # For main container accessing localhost:
+
+              # 1. Block privileged ports (0-{{ .Values.initContainer.privilegedPortEnd }}) for safety
+              iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset
+
+              # 2. Allow redirected traffic to Envoy proxy port (needed after NAT redirect)
+              iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT
+
+              # 3. Block other sidecar infrastructure ports ({{ .Values.initContainer.sidecarPortRangeStart }}-{{ .Values.initContainer.sidecarPortRangeEnd }})
+              iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset
+
+              # 4. Allow everything else on localhost (app development ports)
+              iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -j ACCEPT
+
+              # Allow DNS (required for hostname resolution)
+              iptables -t filter -A SIDECAR_ISOLATE -p udp --dport 53 -j ACCEPT
+              iptables -t filter -A SIDECAR_ISOLATE -p tcp --dport 53 -j ACCEPT
+
+              # Allow outbound HTTP/HTTPS to internet (will be redirected by NAT)
+              {{- range .Values.initContainer.redirectPorts }}
+              iptables -t filter -A SIDECAR_ISOLATE -p tcp --dport {{ . }} -j ACCEPT
+              {{- end }}
+
+              # Block all other outbound traffic from main container
+              # Using DROP instead of REJECT for catch-all rule to avoid iptables compatibility issues
+              iptables -t filter -A SIDECAR_ISOLATE -j DROP
+
+              # Apply isolation
+              iptables -t filter -A OUTPUT -j SIDECAR_ISOLATE
 
               # List rules for debugging
               echo "iptables rules applied:"
+              echo "=== NAT table ==="
               iptables -t nat -L -v -n
+              echo "=== FILTER table ==="
+              iptables -t filter -L -v -n
 
               echo "Init container completed successfully!"
+              echo "- Main container can make HTTP/HTTPS requests (redirected to Envoy)"
+              echo "- Main container can use localhost for development"
+              echo "- Main container CANNOT access privileged ports (0-{{ .Values.initContainer.privilegedPortEnd }})"
+              echo "- Main container CANNOT access sidecar ports ({{ .Values.initContainer.sidecarPortRangeStart }}-{{ .Values.initContainer.sidecarPortRangeEnd }})"
             volumeMounts:
             - name: ca-bundle
               mountPath: /ca-bundle
@@ -109,6 +161,15 @@ spec:
               protocol: TCP
             resources:
               {{- toYaml .Values.envoy.resources | nindent 14 }}
+            securityContext:
+              runAsUser: {{ .Values.envoy.uid }}
+              runAsGroup: {{ .Values.envoy.gid }}
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: false
             volumeMounts:
             - name: envoy-config
               mountPath: /etc/envoy/config
@@ -146,7 +207,7 @@ spec:
             args:
             - "run"
             - "--server"
-            - "--addr=0.0.0.0:8181"
+            - "--addr=0.0.0.0:{{ .Values.opa.port }}"
             - "--config-file=/config/config.yaml"
             - "/policies/policy.rego"
             - "/policies/data.yml"
@@ -155,10 +216,18 @@ spec:
               containerPort: {{ .Values.opa.port }}
               protocol: TCP
             - name: opa-grpc
-              containerPort: 9191
+              containerPort: {{ .Values.opa.grpcPort }}
               protocol: TCP
             resources:
               {{- toYaml .Values.opa.resources | nindent 14 }}
+            securityContext:
+              runAsUser: {{ .Values.opa.uid }}
+              runAsGroup: {{ .Values.opa.gid }}
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
             volumeMounts:
             - name: opa-policy
               mountPath: /policies
@@ -169,13 +238,13 @@ spec:
             livenessProbe:
               httpGet:
                 path: /health
-                port: 8181
+                port: {{ .Values.opa.port }}
               initialDelaySeconds: 10
               periodSeconds: 5
             readinessProbe:
               httpGet:
                 path: /health
-                port: 8181
+                port: {{ .Values.opa.port }}
               initialDelaySeconds: 5
               periodSeconds: 5
           {{- end }}

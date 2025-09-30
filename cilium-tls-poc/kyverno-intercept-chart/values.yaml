@@ -52,8 +52,10 @@ envoy:
     requests:
       memory: "128Mi"
       cpu: "100m"
-  port: 8080
-  adminPort: 9901
+  port: 15001      # Proxy port (sidecar infrastructure range)
+  adminPort: 15000 # Admin interface
+  uid: 101         # Run as non-root user
+  gid: 101
   logLevel: info
 
 # OPA sidecar configuration
@@ -67,7 +69,10 @@ opa:
     requests:
       memory: "64Mi"
       cpu: "50m"
-  port: 8181
+  port: 15020      # HTTP API (sidecar infrastructure range)
+  grpcPort: 15021  # gRPC ext_authz port
+  uid: 102         # Run as non-root user
+  gid: 102
 
   # OPA policy configuration (imported from docker-mitm-bridge)
   policy:
@@ -101,11 +106,10 @@ initContainer:
   redirectPorts:
     - 80
     - 443
-  excludeCIDRs:
-    - "127.0.0.1/32"
-    - "10.0.0.0/8"
-    - "172.16.0.0/12"
-    - "192.168.0.0/16"
+  # Port isolation config
+  sidecarPortRangeStart: 15000  # Start of sidecar infrastructure range
+  sidecarPortRangeEnd: 15099    # End of sidecar infrastructure range
+  privilegedPortEnd: 1023       # Privileged ports to block (0-1023)
 
 # Kyverno policy configuration
 kyverno:
@@ -116,8 +120,8 @@ kyverno:
   # Whether to inject environment variables
   injectEnvVars: false
   envVars:
-    HTTP_PROXY: "http://localhost:8080"
-    HTTPS_PROXY: "http://localhost:8080"
+    HTTP_PROXY: "http://localhost:15001"
+    HTTPS_PROXY: "http://localhost:15001"
     NO_PROXY: "localhost,127.0.0.1,10.0.0.0/8,.cluster.local"
 
 # Test workload configuration
