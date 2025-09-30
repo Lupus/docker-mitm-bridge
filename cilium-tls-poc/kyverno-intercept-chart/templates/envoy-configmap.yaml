@@ -122,7 +122,7 @@ data:
                 address:
                   socket_address:
                     address: 127.0.0.1
-                    port_value: 9191
+                    port_value: {{ .Values.opa.grpcPort }}
       {{- end }}
 
       {{- range $group, $config := .Values.interceptDomains }}
