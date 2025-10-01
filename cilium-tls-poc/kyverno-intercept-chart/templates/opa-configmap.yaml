@@ -61,6 +61,22 @@ data:
       user in data.github_allowed_users
     }
 
+    # Aggregate all domains that require TLS certificates
+    # This endpoint is queried by the SDS control plane to pre-generate certificates
+    required_domains := {domain | domain := all_domains[_]}
+
+    all_domains := array.concat(array.concat(data.allowed_domains, data.unrestricted_domains), array.concat(github_domains, aws_domains))
+
+    # GitHub domains that need certificates
+    github_domains := ["github.com", "api.github.com"] if {
+      data.github_read_access_enabled
+    } else := []
+
+    # AWS domains that need certificates
+    aws_domains := [sprintf("%s.amazonaws.com", [service]) | service := data.aws_allowed_services[_]] if {
+      data.aws_access_enabled
+    } else := []
+
   data.yml: |
     # Domains with restricted access (only GET/HEAD allowed)
     allowed_domains:
@@ -86,6 +102,14 @@ data:
     # Specific GitHub repositories allowed for write operations
     github_allowed_repos:
     {{- range .Values.opa.policy.githubAllowedRepos }}
+      - {{ . | quote }}
+    {{- end }}
+
+    # AWS domains configuration
+    aws_access_enabled: {{ .Values.opa.policy.awsAccessEnabled | default false }}
+
+    aws_allowed_services:
+    {{- range .Values.opa.policy.awsAllowedServices }}
       - {{ . | quote }}
     {{- end }}
 

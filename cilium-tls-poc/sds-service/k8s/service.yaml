@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sds-service
+  namespace: kyverno-intercept
+  labels:
+    app: sds-service
+spec:
+  type: ClusterIP
+  ports:
+  - name: grpc
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: sds-service
