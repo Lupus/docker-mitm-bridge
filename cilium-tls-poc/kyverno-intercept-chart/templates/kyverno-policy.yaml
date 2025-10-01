@@ -36,21 +36,25 @@ spec:
             - |
               set -ex
 
-              # Install CA certificate to system store
+              # Install CA certificate from Secret
               echo "Installing CA certificate..."
-              cp /ca-bundle/ca.crt /usr/local/share/ca-certificates/intercept-ca.crt
-              update-ca-certificates
 
-              # Also copy to shared volume for other containers
-              cp /ca-bundle/ca.crt /shared-ca-certs/intercept-ca.crt
-              # Merge with system certificates
-              cat /etc/ssl/certs/ca-certificates.crt /ca-bundle/ca.crt > /shared-ca-certs/ca-certificates.crt 2>/dev/null || true
+              # Copy CA cert to shared volume
+              cp /ca-secret/tls.crt /shared-ca-certs/intercept-ca.crt
+
+              # Merge with system certificates for containers that need it
+              cat /etc/ssl/certs/ca-certificates.crt /ca-secret/tls.crt > /shared-ca-certs/ca-certificates.crt 2>/dev/null || cp /ca-secret/tls.crt /shared-ca-certs/ca-certificates.crt
+
+              echo "CA certificate installed successfully"
 
               # Setup iptables rules for traffic interception
               echo "Setting up iptables rules..."
 
               ENVOY_UID={{ .Values.envoy.uid }}
               OPA_UID={{ .Values.opa.uid }}
+              {{- if .Values.sds.enabled }}
+              SDS_UID={{ .Values.sds.uid }}
+              {{- end }}
               ENVOY_PROXY_PORT={{ .Values.envoy.port }}
 
               # ============================================
@@ -62,6 +66,9 @@ spec:
               # CRITICAL: Exclude sidecar traffic to prevent infinite loops
               iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN
               iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN
+              {{- if .Values.sds.enabled }}
+              iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${SDS_UID} -j RETURN
+              {{- end }}
 
               # Redirect HTTP/HTTPS traffic to Envoy
               {{- range .Values.initContainer.redirectPorts }}
@@ -77,9 +84,12 @@ spec:
               iptables -t filter -N SIDECAR_ISOLATE 2>/dev/null || true
               iptables -t filter -F SIDECAR_ISOLATE
 
-              # Allow all traffic from Envoy/OPA sidecars (UIDs {{ .Values.envoy.uid }} and {{ .Values.opa.uid }})
+              # Allow all traffic from Envoy/OPA/SDS sidecars
               iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT
               iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT
+              {{- if .Values.sds.enabled }}
+              iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${SDS_UID} -j ACCEPT
+              {{- end }}
 
               # For main container accessing localhost:
 
@@ -124,8 +134,8 @@ spec:
               echo "- Main container CANNOT access privileged ports (0-{{ .Values.initContainer.privilegedPortEnd }})"
               echo "- Main container CANNOT access sidecar ports ({{ .Values.initContainer.sidecarPortRangeStart }}-{{ .Values.initContainer.sidecarPortRangeEnd }})"
             volumeMounts:
-            - name: ca-bundle
-              mountPath: /ca-bundle
+            - name: ca-secret
+              mountPath: /ca-secret
               readOnly: true
             - name: ca-certificates
               mountPath: /shared-ca-certs
@@ -173,19 +183,6 @@ spec:
             volumeMounts:
             - name: envoy-config
               mountPath: /etc/envoy/config
-              readOnly: true
-            {{- range $group, $config := .Values.interceptDomains }}
-            {{- if $config.enabled }}
-            {{- range $domain := $config.domains }}
-            {{- $domainSanitized := $domain | replace "*" "-wildcard-" | replace "." "-" }}
-            - name: cert-{{ $domainSanitized }}
-              mountPath: /etc/envoy/certs/{{ $domainSanitized | replace "*" "wildcard" }}
-              readOnly: true
-            {{- end }}
-            {{- end }}
-            {{- end }}
-            - name: ca-certificates-system
-              mountPath: /etc/ssl/certs
               readOnly: true
             livenessProbe:
               httpGet:
@@ -249,6 +246,57 @@ spec:
               periodSeconds: 5
           {{- end }}
 
+          {{- if .Values.sds.enabled }}
+          - name: sds-service
+            image: "{{ .Values.sds.image.repository }}:{{ .Values.sds.image.tag }}"
+            imagePullPolicy: {{ .Values.sds.image.pullPolicy }}
+            env:
+            - name: SDS_GRPC_PORT
+              value: "{{ .Values.sds.grpcPort }}"
+            - name: SDS_HTTP_PORT
+              value: "{{ .Values.sds.httpPort }}"
+            - name: OPA_URL
+              value: "http://localhost:{{ .Values.opa.port }}"
+            - name: CA_CERT_PATH
+              value: "/ca-secret/tls.crt"
+            - name: CA_KEY_PATH
+              value: "/ca-secret/tls.key"
+            ports:
+            - name: grpc
+              containerPort: {{ .Values.sds.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.sds.httpPort }}
+              protocol: TCP
+            resources:
+              {{- toYaml .Values.sds.resources | nindent 14 }}
+            securityContext:
+              runAsUser: {{ .Values.sds.uid }}
+              runAsGroup: {{ .Values.sds.gid }}
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: false
+            volumeMounts:
+            - name: ca-secret
+              mountPath: /ca-secret
+              readOnly: true
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: {{ .Values.sds.httpPort }}
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: {{ .Values.sds.httpPort }}
+              initialDelaySeconds: 2
+              periodSeconds: 5
+          {{- end }}
+
   # Inject volumes
   - name: inject-volumes
     match:
@@ -263,9 +311,10 @@ spec:
       patchStrategicMerge:
         spec:
           volumes:
-          - name: ca-bundle
-            configMap:
-              name: {{ .Release.Name }}-ca-bundle
+          - name: ca-secret
+            secret:
+              secretName: {{ .Release.Name }}-ca
+              defaultMode: 0444
           - name: ca-certificates
             emptyDir: {}
           - name: ca-certificates-system
@@ -283,19 +332,8 @@ spec:
             configMap:
               name: {{ .Release.Name }}-opa-config
           {{- end }}
-          {{- range $group, $config := .Values.interceptDomains }}
-          {{- if $config.enabled }}
-          {{- range $domain := $config.domains }}
-          {{- $domainSanitized := $domain | replace "*" "-wildcard-" | replace "." "-" }}
-          - name: cert-{{ $domainSanitized }}
-            secret:
-              secretName: {{ $.Release.Name }}-cert-{{ $domainSanitized }}
-              defaultMode: 0644
-          {{- end }}
-          {{- end }}
-          {{- end }}
 
-  # Inject CA certificates into all containers
+  # Inject CA certificates into all containers (except sidecars)
   - name: inject-ca-certs
     match:
       any:
@@ -308,6 +346,17 @@ spec:
     mutate:
       foreach:
       - list: "request.object.spec.containers[]"
+        preconditions:
+          all:
+          - key: "{{ `{{ element.name }}` }}"
+            operator: NotEquals
+            value: envoy-proxy
+          - key: "{{ `{{ element.name }}` }}"
+            operator: NotEquals
+            value: opa-sidecar
+          - key: "{{ `{{ element.name }}` }}"
+            operator: NotEquals
+            value: sds-service
         patchStrategicMerge:
           spec:
             containers:

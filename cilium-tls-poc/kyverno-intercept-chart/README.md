@@ -6,10 +6,11 @@ A Helm chart for transparent TLS/HTTPS interception using Kyverno policy-based s
 
 This Helm chart provides a complete TLS interception solution that:
 - Uses **Kyverno** to automatically inject Envoy proxy sidecars into annotated pods
-- Performs **TLS interception** with pre-generated certificates for known domains
+- Performs **TLS interception** with dynamically configured certificates via hybrid xDS/SDS
 - Enforces **OPA policies** via gRPC ext_authz for fine-grained access control
 - Works transparently with existing applications via iptables rules (no proxy environment variables needed)
 - Implements **Istio-style port isolation** for security and stability
+- Uses **hybrid xDS approach**: SDS control plane queries OPA for domain list, generates certificates, and serves dynamic Envoy configuration
 
 ## Architecture
 
@@ -18,7 +19,7 @@ This Helm chart provides a complete TLS interception solution that:
 │              Application Pod                     │
 ├──────────────────────────────────────────────────┤
 │ Init Container (proxy-init):                     │
-│ • Installs CA certificate                        │
+│ • Installs CA certificate from Secret            │
 │ • Sets up iptables NAT rules (redirect traffic)  │
 │ • Sets up iptables FILTER rules (port isolation) │
 │ • UID-based exclusion (prevents infinite loops)  │
@@ -26,8 +27,10 @@ This Helm chart provides a complete TLS interception solution that:
 │ Envoy Sidecar (UID 101):                        │
 │ • Proxy port: 15001 (HTTPS traffic)             │
 │ • Admin port: 15000 (metrics/config)            │
+│ • Dynamic xDS config from SDS service           │
 │ • TLS termination with internal CA              │
 │ • gRPC ext_authz to OPA                         │
+│ • Dynamic forward proxy for upstream            │
 │ • Upstream TLS re-encryption                    │
 ├──────────────────────────────────────────────────┤
 │ OPA Sidecar (UID 102):                          │
@@ -35,12 +38,20 @@ This Helm chart provides a complete TLS interception solution that:
 │ • gRPC authz: 15021 (Envoy queries)             │
 │ • Policy evaluation and decision logs           │
 ├──────────────────────────────────────────────────┤
-│ Application Container(s) (UID 1000):            │
+│ SDS Service (UID 103):                          │
+│ • xDS control plane: 15090 (LDS + SDS)          │
+│ • Queries OPA for domain list on startup        │
+│ • Pre-generates certificates for all domains    │
+│ • Serves dynamic listener configuration         │
+│ • Caches certificates in memory                 │
+├──────────────────────────────────────────────────┤
+│ Application Container(s) (e.g., UID 12345):     │
 │ • No proxy env vars needed                      │
 │ • Traffic via iptables redirect                 │
 │ • CA cert auto-trusted                          │
 │ • Can use localhost for development             │
 │ • Blocked from sidecar ports (15000-15099)      │
+│ • MUST NOT use UIDs 101, 102, or 103            │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -172,6 +183,7 @@ spec:
 Deploy a test application:
 
 ```bash
+# IMPORTANT: Application MUST run with UID different from sidecars (101, 102, 103)
 # Create test deployment
 cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
@@ -188,16 +200,24 @@ spec:
     metadata:
       labels:
         app: test-app
-        intercept-proxy/enabled: "true"
+        intercept-proxy/enabled: "true"  # Triggers sidecar injection
     spec:
+      securityContext:
+        runAsUser: 12345    # REQUIRED: Must NOT be 101, 102, or 103
+        runAsGroup: 12345
+        fsGroup: 12345
       containers:
       - name: test
         image: curlimages/curl:latest
-        command: ["sleep", "3600"]
+        command: ["sh", "-c", "while true; do sleep 3600; done"]
 EOF
 
-# Wait for pod to be ready (all 3 containers)
-kubectl wait --for=condition=ready pod -l app=test-app -n kyverno-intercept
+# Wait for pod to be ready (all 4 containers: init + 3 sidecars + app)
+kubectl wait --for=condition=ready pod -l app=test-app -n kyverno-intercept --timeout=120s
+
+# Verify sidecars are running
+kubectl get pod -l app=test-app -n kyverno-intercept
+# Should show: READY 4/4
 
 # Test HTTPS interception (no -k flag needed!)
 kubectl exec -n kyverno-intercept deploy/test-app -c test -- \
@@ -207,6 +227,10 @@ kubectl exec -n kyverno-intercept deploy/test-app -c test -- \
 kubectl exec -n kyverno-intercept deploy/test-app -c test -- \
   curl -v https://api.github.com 2>&1 | grep "issuer:"
 # Should show: issuer: C=US; ST=CA; O=Internal-CA; CN=Kyverno-Intercept-CA
+
+# Test multiple domains
+kubectl exec -n kyverno-intercept deploy/test-app -c test -- \
+  curl -s https://github.com | head -10
 
 # Test OPA policy enforcement (POST should be blocked)
 kubectl exec -n kyverno-intercept deploy/test-app -c test -- \
@@ -219,27 +243,64 @@ kubectl exec -n kyverno-intercept deploy/test-app -c test -- \
 # Should timeout or be rejected
 ```
 
+**Common Issue: UID Collision**
+
+If interception isn't working, check the application UID:
+
+```bash
+kubectl exec -n kyverno-intercept deploy/test-app -c test -- id
+# If this shows UID 101, 102, or 103, traffic bypasses interception!
+# Fix by setting securityContext.runAsUser to a different UID (e.g., 12345)
+```
+
 ## How It Works
 
-### 1. Certificate Generation
-- On installation, a Helm hook job generates:
-  - Internal CA certificate
-  - TLS certificates for all configured domains
-- Certificates are stored as Kubernetes secrets
+### 1. CA and Certificate Setup
+
+**On Helm Install:**
+- Pre-install hook job generates only the CA certificate (not per-domain certificates)
+- CA public and private keys stored in Kubernetes Secret
+- CA certificate distributed to all pods via init container
+
+**On Pod Startup:**
+- SDS service sidecar starts and loads CA from Secret
+- SDS queries OPA's `required_domains` rule to get full domain list
+- SDS pre-generates TLS certificates for all required domains
+- Certificates cached in memory for Envoy to request
 
 ### 2. Sidecar Injection
 When a pod with label `intercept-proxy/enabled: true` is created:
-- **Init Container**: Sets up iptables rules for traffic redirection and port isolation
-- **Envoy Sidecar**: Handles TLS interception and forwarding
-- **OPA Sidecar**: Evaluates access policies
+- **Init Container**: Sets up iptables rules for traffic redirection and port isolation, installs CA
+- **Envoy Sidecar**: Connects to SDS service for dynamic xDS configuration
+- **OPA Sidecar**: Provides policy evaluation and domain list aggregation
+- **SDS Service**: Acts as xDS control plane (LDS + SDS) serving dynamic configuration
 
-### 3. Traffic Flow
-1. Application makes HTTPS request
+### 3. Dynamic Configuration Flow
+
+```
+1. Envoy starts → connects to SDS service (port 15090) for xDS
+   ↓
+2. SDS has already queried OPA for required_domains on startup
+   ↓
+3. SDS returns LDS response with listener + filter chains for each domain
+   ↓
+4. Envoy requests certificates via SDS for each domain
+   ↓
+5. SDS returns pre-generated certificates from cache
+   ↓
+6. Envoy dynamically configures listeners with SNI-based routing
+```
+
+### 4. Traffic Flow
+1. Application makes HTTPS request (e.g., to api.github.com)
 2. iptables NAT redirects to Envoy (port 15001) - no proxy env vars needed
-3. Envoy terminates TLS using pre-generated certificate
-4. Envoy queries OPA via gRPC (port 15021) for authorization
-5. OPA evaluates policy and returns allow/deny decision
-6. If allowed, Envoy re-encrypts and forwards to destination
+3. Envoy receives connection, extracts SNI via tls_inspector listener filter
+4. Envoy routes to correct filter chain based on SNI
+5. Envoy terminates TLS using certificate from SDS
+6. Envoy queries OPA via gRPC (port 15021) for authorization via ext_authz filter
+7. OPA evaluates policy and returns allow/deny decision
+8. If allowed, Envoy uses dynamic_forward_proxy to resolve and connect to upstream
+9. Envoy re-encrypts with real server certificate and forwards request
 
 ### 4. iptables Rules
 
@@ -411,9 +472,12 @@ kubectl get pod <pod-name> -n kyverno-intercept -o jsonpath='{.spec.containers[?
    - Verify certificate for domain exists: `kubectl get secrets -n kyverno-intercept | grep cert-`
 
 3. **Traffic not intercepted**
+   - **Most common cause**: Application container running as UID 101, 102, or 103
+     - Check: `kubectl exec <pod> -c <container> -- id`
+     - Fix: Set `securityContext.runAsUser` to different UID (e.g., 12345)
    - Verify iptables rules in init container logs
    - Check Envoy is listening on port 15001
-   - Ensure main container is not running as UID 101 (would bypass proxy)
+   - Verify SDS service logs show certificates were generated
 
 4. **OPA container restarting**
    - Check liveness probe configuration matches OPA port (15020)
@@ -441,11 +505,12 @@ This chart follows security and operational best practices:
 
 ## Limitations
 
-- Requires known domains in advance (no dynamic certificate generation)
-- Certificates must be pre-generated for all intercepted domains
-- Wildcard certificates supported but must be explicitly configured
-- No automatic certificate rotation (requires chart upgrade)
+- Requires domains configured in OPA policy (via `required_domains` rule)
+- All domains must be known at pod startup (no dynamic domain discovery)
+- Certificates cached in memory only (lost on SDS service restart)
+- CA regenerated on chart upgrade (all existing certificates become invalid)
 - iptables rules require init container with NET_ADMIN capability
+- Application containers must NOT use UIDs 101, 102, or 103 (reserved for sidecars)
 
 ## Security Considerations
 

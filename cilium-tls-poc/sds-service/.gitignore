@@ -1,0 +1,14 @@
+# Built binaries (local testing only)
+sds-service
+sds-service.gz
+sds-service-part-*
+
+# Go build artifacts
+vendor/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

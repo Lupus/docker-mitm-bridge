@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sds-service
+  namespace: kyverno-intercept
+  labels:
+    app: sds-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sds-service
+  template:
+    metadata:
+      labels:
+        app: sds-service
+    spec:
+      containers:
+      - name: sds-service
+        image: ghcr.io/lupus/docker-mitm-bridge/sds-service:latest
+        imagePullPolicy: Always
+        env:
+        - name: SDS_GRPC_PORT
+          value: "8080"
+        - name: CA_OUTPUT_PATH
+          value: /tmp/ca-cert.pem
+        ports:
+        - name: grpc
+          containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false

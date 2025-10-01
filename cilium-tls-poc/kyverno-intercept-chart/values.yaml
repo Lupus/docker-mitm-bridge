@@ -58,6 +58,25 @@ envoy:
   gid: 101
   logLevel: info
 
+# SDS (Secret Discovery Service) configuration
+sds:
+  enabled: true
+  image:
+    repository: ghcr.io/lupus/docker-mitm-bridge/sds-service
+    tag: latest
+    pullPolicy: Always
+  grpcPort: 15080   # gRPC port for SDS (sidecar infrastructure range)
+  httpPort: 15081   # HTTP port for CA distribution
+  uid: 103          # Run as non-root user
+  gid: 103
+  resources:
+    limits:
+      memory: "128Mi"
+      cpu: "200m"
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+
 # OPA sidecar configuration
 opa:
   enabled: true
@@ -98,6 +117,11 @@ opa:
     githubAllowedUsers: []
     githubAllowedRepos:
       - "Lupus/circuitry-cad"
+
+    # AWS-specific configuration
+    awsAccessEnabled: false
+    awsAllowedServices: []
+      # Example: ["s3", "ec2", "sts"]
 
 # Init container configuration
 initContainer:

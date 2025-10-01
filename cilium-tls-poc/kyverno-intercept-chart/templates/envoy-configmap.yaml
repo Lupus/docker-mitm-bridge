@@ -5,12 +5,107 @@ metadata:
   namespace: {{ .Values.namespace }}
 data:
   envoy.yaml: |
+    node:
+      id: envoy-sidecar
+      cluster: intercept-proxy
+
     admin:
       address:
         socket_address:
           address: 0.0.0.0
           port_value: {{ .Values.envoy.adminPort }}
 
+    {{- if .Values.sds.enabled }}
+    # Dynamic configuration via xDS from SDS service
+    dynamic_resources:
+      lds_config:
+        resource_api_version: V3
+        api_config_source:
+          api_type: GRPC
+          transport_api_version: V3
+          grpc_services:
+          - envoy_grpc:
+              cluster_name: xds_cluster
+          set_node_on_first_message_only: true
+
+    static_resources:
+      clusters:
+      # xDS control plane cluster (SDS service provides both LDS and SDS)
+      - name: xds_cluster
+        connect_timeout: 1s
+        type: STATIC
+        lb_policy: ROUND_ROBIN
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config:
+              http2_protocol_options: {}
+        load_assignment:
+          cluster_name: xds_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: {{ .Values.sds.grpcPort }}
+
+      # Dynamic forward proxy cluster for outbound connections
+      - name: dynamic_forward_proxy_cluster
+        connect_timeout: 10s
+        lb_policy: CLUSTER_PROVIDED
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: dynamic_forward_proxy_cache_config
+              dns_lookup_family: V4_ONLY
+              max_hosts: 100
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: "{sni}"
+            common_tls_context:
+              validation_context:
+                trusted_ca:
+                  filename: "/etc/ssl/certs/ca-certificates.crt"
+
+      {{- if .Values.opa.enabled }}
+      # OPA ext_authz cluster
+      - name: ext_authz_cluster
+        connect_timeout: 1s
+        type: STATIC
+        lb_policy: ROUND_ROBIN
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config:
+              http2_protocol_options: {}
+        load_assignment:
+          cluster_name: ext_authz_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: {{ .Values.opa.grpcPort }}
+      {{- end }}
+
+    layered_runtime:
+      layers:
+      - name: static_layer
+        static_layer:
+          envoy:
+            resource_limits:
+              listener:
+                listener_0:
+                  connection_limit: 10000
+
+    {{- else }}
+    # Static configuration (legacy mode without SDS)
     static_resources:
       listeners:
       - name: http_listener
@@ -23,14 +118,67 @@ data:
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
         filter_chains:
-        # Default filter chain for unmatched traffic (forward as-is)
-        - filters:
-          - name: envoy.filters.network.tcp_proxy
+        {{- if .Values.sds.enabled }}
+        # Dynamic TLS interception for ANY domain (using SDS)
+        - filter_chain_match:
+            transport_protocol: "tls"
+          transport_socket:
+            name: envoy.transport_sockets.tls
             typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-              stat_prefix: tcp_proxy
-              cluster: dynamic_forward_proxy_cluster
-
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificate_sds_secret_configs:
+                - name: "wildcard"
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: sds_cluster
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: https_dynamic
+              codec_type: AUTO
+              route_config:
+                name: dynamic_route
+                virtual_hosts:
+                - name: dynamic_vhost
+                  domains: ["*"]
+                  routes:
+                  - match:
+                      prefix: "/"
+                    route:
+                      cluster: dynamic_forward_proxy_cluster
+                      timeout: 30s
+              http_filters:
+              - name: envoy.filters.http.dynamic_forward_proxy
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+                  dns_cache_config:
+                    name: dynamic_forward_proxy_cache_config
+                    dns_lookup_family: V4_ONLY
+                    max_hosts: 100
+              {{- if .Values.opa.enabled }}
+              - name: envoy.ext_authz
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                  transport_api_version: V3
+                  with_request_body:
+                    max_request_bytes: 8192
+                    allow_partial_message: true
+                  grpc_service:
+                    envoy_grpc:
+                      cluster_name: opa_cluster
+                    timeout: 1s
+                  include_peer_certificate: false
+              {{- end }}
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        {{- else }}
         {{- range $group, $config := .Values.interceptDomains }}
         {{- if $config.enabled }}
         {{- range $domain := $config.domains }}
@@ -88,9 +236,17 @@ data:
         {{- end }}
         {{- end }}
         {{- end }}
+        {{- end }}
+        # Default filter chain for non-TLS or unmatched traffic
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: tcp_proxy
+              cluster: dynamic_forward_proxy_cluster
 
       clusters:
-      # Dynamic forward proxy cluster for non-intercepted traffic
+      # Dynamic forward proxy cluster
       - name: dynamic_forward_proxy_cluster
         connect_timeout: 10s
         lb_policy: CLUSTER_PROVIDED
@@ -102,6 +258,17 @@ data:
               name: dynamic_forward_proxy_cache_config
               dns_lookup_family: V4_ONLY
               max_hosts: 100
+        {{- if .Values.sds.enabled }}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: "{sni}"
+            common_tls_context:
+              validation_context:
+                trusted_ca:
+                  filename: "/etc/ssl/certs/ca-certificates.crt"
+        {{- end }}
 
       {{- if .Values.opa.enabled }}
       # OPA cluster for authorization (gRPC)
@@ -123,6 +290,28 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: {{ .Values.opa.grpcPort }}
+      {{- end }}
+
+      {{- if .Values.sds.enabled }}
+      # SDS cluster for dynamic certificate provisioning (gRPC via localhost sidecar)
+      - name: sds_cluster
+        connect_timeout: 1s
+        type: STATIC
+        lb_policy: ROUND_ROBIN
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config:
+              http2_protocol_options: {}
+        load_assignment:
+          cluster_name: sds_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: {{ .Values.sds.grpcPort }}
       {{- end }}
 
       {{- range $group, $config := .Values.interceptDomains }}
@@ -166,3 +355,4 @@ data:
               listener:
                 http_listener:
                   connection_limit: 10000
+    {{- end }}
