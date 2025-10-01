@@ -6,11 +6,11 @@ A Helm chart for transparent TLS/HTTPS interception using Kyverno policy-based s
 
 This Helm chart provides a complete TLS interception solution that:
 - Uses **Kyverno** to automatically inject Envoy proxy sidecars into annotated pods
-- Performs **TLS interception** with dynamically configured certificates via hybrid xDS/SDS
+- Performs **TLS interception** with dynamically configured certificates via full dynamic xDS
 - Enforces **OPA policies** via gRPC ext_authz for fine-grained access control
 - Works transparently with existing applications via iptables rules (no proxy environment variables needed)
 - Implements **Istio-style port isolation** for security and stability
-- Uses **hybrid xDS approach**: SDS control plane queries OPA for domain list, generates certificates, and serves dynamic Envoy configuration
+- Uses **full dynamic xDS approach**: Control plane provides all Envoy configuration (CDS+LDS+SDS) following best practices with minimal bootstrap
 
 ## Architecture
 
@@ -39,10 +39,12 @@ This Helm chart provides a complete TLS interception solution that:
 │ • Policy evaluation and decision logs           │
 ├──────────────────────────────────────────────────┤
 │ SDS Service (UID 103):                          │
-│ • xDS control plane: 15090 (LDS + SDS)          │
+│ • xDS control plane: 15090 (CDS+LDS+SDS)        │
 │ • Queries OPA for domain list on startup        │
 │ • Pre-generates certificates for all domains    │
-│ • Serves dynamic listener configuration         │
+│ • Serves dynamic cluster configuration (CDS)    │
+│ • Serves dynamic listener configuration (LDS)   │
+│ • Serves certificates on demand (SDS)           │
 │ • Caches certificates in memory                 │
 ├──────────────────────────────────────────────────┤
 │ Application Container(s) (e.g., UID 12345):     │
@@ -271,24 +273,24 @@ kubectl exec -n kyverno-intercept deploy/test-app -c test -- id
 ### 2. Sidecar Injection
 When a pod with label `intercept-proxy/enabled: true` is created:
 - **Init Container**: Sets up iptables rules for traffic redirection and port isolation, installs CA
-- **Envoy Sidecar**: Connects to SDS service for dynamic xDS configuration
+- **Envoy Sidecar**: Minimal bootstrap, connects to SDS service for full dynamic xDS configuration
 - **OPA Sidecar**: Provides policy evaluation and domain list aggregation
-- **SDS Service**: Acts as xDS control plane (LDS + SDS) serving dynamic configuration
+- **SDS Service**: Acts as full xDS control plane (CDS+LDS+SDS) serving all dynamic configuration
 
 ### 3. Dynamic Configuration Flow
 
 ```
-1. Envoy starts → connects to SDS service (port 15090) for xDS
+1. Envoy starts with minimal bootstrap → connects to xDS service (port 15090)
    ↓
-2. SDS has already queried OPA for required_domains on startup
+2. xDS service has already queried OPA for required_domains on startup
    ↓
-3. SDS returns LDS response with listener + filter chains for each domain
+3. Envoy sends CDS request → receives ext_authz and dynamic_forward_proxy clusters
    ↓
-4. Envoy requests certificates via SDS for each domain
+4. Envoy sends LDS request → receives listener with filter chains for each domain
    ↓
-5. SDS returns pre-generated certificates from cache
+5. Envoy sends SDS requests → receives pre-generated certificates from cache
    ↓
-6. Envoy dynamically configures listeners with SNI-based routing
+6. Envoy activates with fully dynamic configuration (no static clusters/listeners)
 ```
 
 ### 4. Traffic Flow
@@ -403,17 +405,23 @@ kubectl get pod <pod-name> -o yaml | grep -E "name: (envoy-proxy|opa-sidecar|pro
 ### Debug Envoy Proxy
 
 ```bash
-# Check Envoy admin interface
-kubectl port-forward <pod-name> -n kyverno-intercept 15000:15000
-curl http://localhost:15000/stats
-curl http://localhost:15000/clusters
+# Note: Envoy admin port (15000) is blocked by iptables for security
+# Access it via ephemeral debug container or pod IP instead
 
-# View Envoy logs
+# Using ephemeral debug container (bypasses iptables via pod IP)
+POD_IP=$(kubectl get pod <pod-name> -n kyverno-intercept -o jsonpath='{.status.podIP}')
+kubectl debug <pod-name> -n kyverno-intercept --image=nicolaka/netshoot:latest \
+  --target=envoy-proxy -- curl http://$POD_IP:15000/clusters
+
+# Check Envoy logs
 kubectl logs <pod-name> -n kyverno-intercept -c envoy-proxy
 
-# Check Envoy is listening on correct port
-kubectl exec <pod-name> -n kyverno-intercept -c envoy-proxy -- \
-  netstat -tlnp | grep 15001
+# Verify CDS is working (look for "cds: add 2 cluster(s)")
+kubectl logs <pod-name> -n kyverno-intercept -c envoy-proxy | grep cds
+
+# Check Envoy is listening on correct ports
+kubectl debug <pod-name> -n kyverno-intercept --image=nicolaka/netshoot:latest \
+  --target=envoy-proxy -- netstat -tlnp
 ```
 
 ### Debug OPA Policies

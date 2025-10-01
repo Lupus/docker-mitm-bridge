@@ -1,14 +1,16 @@
-# Hybrid xDS/SDS Control Plane for TLS Interception
+# Full Dynamic xDS Control Plane for TLS Interception
 
-A lightweight xDS control plane that provides dynamic Envoy configuration and certificate provisioning for transparent TLS interception.
+A lightweight xDS control plane that provides complete dynamic Envoy configuration and certificate provisioning for transparent TLS interception.
 
 ## Overview
 
-This service implements a hybrid xDS/SDS control plane that:
+This service implements a full dynamic xDS control plane that:
 - **Queries OPA**: Fetches domain list from OPA's `required_domains` rule on startup
 - **Pre-generates certificates**: Creates TLS certificates for all domains using CA from Secret
+- **Serves CDS**: Provides dynamic cluster configuration (ext_authz, dynamic_forward_proxy)
 - **Serves LDS**: Provides dynamic listener configuration with SNI-based filter chains
 - **Serves SDS**: Delivers pre-generated certificates to Envoy on demand
+- **Single Source of Truth**: All Envoy configuration managed in Go code, minimal bootstrap
 - **Lightweight**: Minimal container image (~15MB) with statically compiled Go binary
 - **Integrated**: Works seamlessly with Kyverno-injected sidecars
 
@@ -23,37 +25,42 @@ This service implements a hybrid xDS/SDS control plane that:
                │ HTTP API query
                ▼
 ┌─────────────────────────────────────┐
-│    xDS/SDS Control Plane (this)     │
+│  Full Dynamic xDS Control Plane     │
+│              (this)                 │
 │  1. Loads CA from K8s Secret        │
 │  2. Queries OPA for domain list     │
 │  3. Pre-generates all certificates  │
 │  4. Caches certificates in memory   │
-│  5. Serves LDS (listener config)    │
-│  6. Serves SDS (certificates)       │
+│  5. Serves CDS (cluster config)     │
+│  6. Serves LDS (listener config)    │
+│  7. Serves SDS (certificates)       │
 │  • gRPC port: 15090                 │
 └──────────────┬──────────────────────┘
-               │ xDS gRPC (LDS + SDS)
+               │ xDS gRPC (CDS+LDS+SDS)
                ▼
 ┌─────────────────────────────────────┐
 │          Envoy Proxy                │
-│  • Connects to xDS on startup       │
-│  • Receives dynamic listeners       │
-│  • Requests certs for each domain   │
+│  • Minimal bootstrap (xds_cluster)  │
+│  • Receives dynamic clusters (CDS)  │
+│  • Receives dynamic listeners (LDS) │
+│  • Requests certs for domains (SDS) │
 │  • Configures SNI-based routing     │
 └─────────────────────────────────────┘
 ```
 
 ## Features
 
-- **Hybrid xDS approach**: Combines benefits of static (known domains) and dynamic (xDS configuration) approaches
+- **Full Dynamic xDS**: Follows Envoy best practices with minimal bootstrap, all config via xDS
+- **Single Source of Truth**: All Envoy configuration (clusters, listeners, secrets) managed in one place
 - **OPA integration**: Automatically discovers required domains from OPA policy
 - **CA from Secret**: Loads CA certificate and key from Kubernetes Secret (not self-generated)
 - **Pre-generation**: Creates all certificates at startup for fast serving
+- **CDS (Cluster Discovery Service)**: Dynamically provides ext_authz and dynamic_forward_proxy clusters
 - **LDS (Listener Discovery Service)**: Dynamically configures Envoy listeners with per-domain filter chains
 - **SDS (Secret Discovery Service)**: Serves pre-generated certificates on demand
 - **Certificate caching**: Certificates cached in memory for repeated requests
 - **SNI-based routing**: Each domain gets its own filter chain with SNI matching
-- **Dynamic forward proxy**: Configures Envoy HTTP filters for upstream resolution
+- **Minimal bootstrap**: Envoy bootstrap contains ONLY xds_cluster, everything else via xDS
 - **Minimal image**: Multi-stage Docker build with statically compiled binary
 
 ## Building
@@ -116,7 +123,7 @@ make redeploy  # Builds, pushes, deletes old deployment, and deploys new
 ### 1. Startup and Initialization Flow
 
 ```
-1. SDS service container starts in pod
+1. xDS Control Plane starts in pod
    ↓
 2. Loads CA certificate and private key from mounted Secret
    ↓
@@ -124,40 +131,67 @@ make redeploy  # Builds, pushes, deletes old deployment, and deploys new
    ↓
 4. Pre-generates TLS certificates for all domains using CA
    ↓
-5. Builds LDS listener configuration with filter chains per domain
+5. Builds CDS cluster configuration (ext_authz, dynamic_forward_proxy)
    ↓
-6. Starts gRPC server on port 15090
+6. Builds LDS listener configuration with filter chains per domain
    ↓
-7. Waits for Envoy to connect
+7. Starts gRPC server on port 15090
+   ↓
+8. Waits for Envoy to connect
 ```
 
 ### 2. Dynamic Configuration Flow
 
 ```
-1. Envoy connects to xDS endpoint (localhost:15090)
+1. Envoy starts with minimal bootstrap → connects to xDS (localhost:15090)
    ↓
-2. Envoy sends LDS request (ListenerDiscoveryService)
+2. Envoy sends CDS request (ClusterDiscoveryService)
    ↓
-3. SDS returns listener with:
+3. xDS returns 2 clusters:
+   - ext_authz_cluster (gRPC to OPA on port 15021)
+   - dynamic_forward_proxy_cluster (for upstream connections)
+   ↓
+4. Envoy sends LDS request (ListenerDiscoveryService)
+   ↓
+5. xDS returns listener with:
    - tls_inspector filter for SNI extraction
    - Per-domain filter chains with SNI matching
-   - ext_authz filter for OPA authorization
-   - dynamic_forward_proxy filter for upstream
+   - ext_authz filter referencing ext_authz_cluster
+   - dynamic_forward_proxy filter referencing dynamic_forward_proxy_cluster
    ↓
-4. Envoy sends SDS requests for each domain certificate
+6. Envoy sends SDS requests for each domain certificate
    ↓
-5. SDS returns pre-generated certificates from cache
+7. xDS returns pre-generated certificates from cache
    ↓
-6. Envoy configures and activates listener with all filter chains
+8. Envoy activates with fully dynamic configuration
 ```
 
 ### 3. Envoy Integration
 
-Envoy bootstrap configuration (dynamic):
+Envoy bootstrap configuration (minimal - follows best practices):
 
 ```yaml
+node:
+  id: envoy-sidecar
+  cluster: intercept-proxy
+
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 15000
+
 dynamic_resources:
-  lds_config:
+  cds_config:  # Cluster Discovery Service
+    resource_api_version: V3
+    api_config_source:
+      api_type: GRPC
+      transport_api_version: V3
+      grpc_services:
+      - envoy_grpc:
+          cluster_name: xds_cluster
+
+  lds_config:  # Listener Discovery Service
     resource_api_version: V3
     api_config_source:
       api_type: GRPC
@@ -168,7 +202,8 @@ dynamic_resources:
 
 static_resources:
   clusters:
-  - name: xds_cluster  # SDS service providing both LDS and SDS
+  # ONLY xds_cluster - everything else provided dynamically
+  - name: xds_cluster
     type: STATIC
     connect_timeout: 1s
     typed_extension_protocol_options:
@@ -187,10 +222,11 @@ static_resources:
                 port_value: 15090
 ```
 
-The service automatically configures:
-- **SNI-based routing**: Each domain gets its own filter chain
-- **TLS termination**: Using pre-generated certificates
-- **ext_authz integration**: Queries OPA for authorization
+The control plane automatically configures via xDS:
+- **Clusters (CDS)**: ext_authz_cluster, dynamic_forward_proxy_cluster
+- **Listeners (LDS)**: SNI-based routing with per-domain filter chains
+- **Secrets (SDS)**: TLS certificates for each intercepted domain
+- **ext_authz integration**: Queries OPA for authorization decisions
 - **Dynamic forward proxy**: Resolves and connects to upstream servers
 
 ## Testing
@@ -229,6 +265,7 @@ curl http://localhost:15000/config_dump | jq '.configs[] | select(.["@type"] | c
 | `CA_CERT_PATH` | Path to CA certificate in Secret mount | `/ca-secret/tls.crt` |
 | `CA_KEY_PATH` | Path to CA private key in Secret mount | `/ca-secret/tls.key` |
 | `OPA_URL` | OPA HTTP API endpoint | `http://localhost:15020` |
+| `OPA_GRPC_PORT` | OPA gRPC ext_authz port (for CDS config) | `15021` |
 
 ### Deployment Customization
 
@@ -242,19 +279,21 @@ env:
   value: /ca/ca-cert.pem
 ```
 
-## Advantages of Hybrid Approach
+## Advantages of Full Dynamic xDS Approach
 
-### vs. Static Certificate Pre-generation
+### vs. Static Configuration
+1. **Single Source of Truth**: All Envoy config (clusters, listeners, secrets) in one place (Go code)
+2. **No Circular Dependencies**: Bootstrap only contains xDS cluster, everything else via xDS
+3. **Follows Best Practices**: Aligns with Envoy documentation and production service meshes (Istio, Consul)
+4. **Easier Maintenance**: Change cluster config without touching YAML templates
+5. **Dynamic configuration**: All resources configured at runtime via xDS
+
+### vs. Hybrid Static/Dynamic
 1. **No per-domain Secrets**: All certificates in memory, not stored individually
-2. **Dynamic configuration**: Envoy listeners configured at runtime
+2. **Minimal bootstrap**: Envoy bootstrap contains ONLY xds_cluster
 3. **Easier updates**: Change OPA policy, restart pods - no Helm upgrade needed
 4. **Smaller footprint**: Single CA Secret instead of dozens of certificate Secrets
-
-### vs. Pure Dynamic SDS
-1. **Known domains**: All domains defined in OPA policy upfront
-2. **Pre-generation**: Faster first request (no generation delay)
-3. **Simpler**: No need for on-the-fly certificate generation logic
-4. **Predictable**: Domain list validated at startup, not discovered dynamically
+5. **Predictable**: Domain list validated at startup, known set of domains
 
 ## Limitations
 
@@ -280,23 +319,29 @@ Possible enhancements:
 
 ### Key Components
 
-1. **LDSServer**: Implements Listener Discovery Service
+1. **CDSServer**: Implements Cluster Discovery Service
+   - Provides ext_authz_cluster (gRPC to OPA on port 15021)
+   - Provides dynamic_forward_proxy_cluster (for upstream connections)
+   - Supports streaming and fetch modes
+   - Configures HTTP/2 protocol options for gRPC clusters
+
+2. **LDSServer**: Implements Listener Discovery Service
    - Builds single listener on port 15001
    - Creates filter chain per domain with SNI matching
    - Adds tls_inspector for SNI extraction
    - Configures HTTP Connection Manager with ext_authz and dynamic_forward_proxy
 
-2. **SDSServer**: Implements Secret Discovery Service
+3. **SDSServer**: Implements Secret Discovery Service
    - Serves pre-generated certificates from cache
    - Supports streaming and fetch modes
    - Handles certificate requests by resource name (domain)
 
-3. **OPAClient**: Queries OPA for domain list
+4. **OPAClient**: Queries OPA for domain list
    - HTTP GET to `/v1/data/intercept/required_domains`
    - Parses JSON response for domain array
    - Used once at startup to build domain list
 
-4. **CertificateAuthority**: Manages certificates
+5. **CertificateAuthority**: Manages certificates
    - Loads CA from Kubernetes Secret mount
    - Generates certificates signed by CA
    - Caches certificates in memory map

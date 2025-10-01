@@ -19,17 +19,21 @@ import (
 	"time"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	dynamic_forward_proxy_cluster "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy_common "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	ext_authz "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_authz/v3"
 	tls_inspector "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	router "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
+	httpproto "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	clusterservice "github.com/envoyproxy/go-control-plane/envoy/service/cluster/v3"
 	listenerservice "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	secret "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
@@ -678,6 +682,206 @@ func (s *LDSServer) FetchListeners(ctx context.Context, req *discovery.Discovery
 	return resp, nil
 }
 
+type CDSServer struct {
+	clusterCache []*anypb.Any
+	version      int
+	mu           sync.RWMutex
+	opaGrpcPort  string
+}
+
+func NewCDSServer(opaGrpcPort string) (*CDSServer, error) {
+	server := &CDSServer{
+		version:     1,
+		opaGrpcPort: opaGrpcPort,
+	}
+
+	if err := server.buildClusters(); err != nil {
+		return nil, err
+	}
+
+	return server, nil
+}
+
+func (s *CDSServer) buildClusters() error {
+	log.Println("Building Envoy cluster configuration...")
+
+	clusters := make([]*anypb.Any, 0)
+
+	// 1. ext_authz_cluster - gRPC cluster for OPA authorization
+	// Parse OPA gRPC port
+	opaPort := uint32(15021)
+	if s.opaGrpcPort != "" {
+		var port int
+		if _, err := fmt.Sscanf(s.opaGrpcPort, "%d", &port); err == nil {
+			opaPort = uint32(port)
+		}
+	}
+
+	extAuthzCluster := &cluster.Cluster{
+		Name:           "ext_authz_cluster",
+		ConnectTimeout: durationpb.New(1 * time.Second),
+		ClusterDiscoveryType: &cluster.Cluster_Type{
+			Type: cluster.Cluster_STATIC,
+		},
+		LbPolicy: cluster.Cluster_ROUND_ROBIN,
+		LoadAssignment: &endpoint.ClusterLoadAssignment{
+			ClusterName: "ext_authz_cluster",
+			Endpoints: []*endpoint.LocalityLbEndpoints{
+				{
+					LbEndpoints: []*endpoint.LbEndpoint{
+						{
+							HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+								Endpoint: &endpoint.Endpoint{
+									Address: &core.Address{
+										Address: &core.Address_SocketAddress{
+											SocketAddress: &core.SocketAddress{
+												Protocol: core.SocketAddress_TCP,
+												Address:  "127.0.0.1",
+												PortSpecifier: &core.SocketAddress_PortValue{
+													PortValue: opaPort,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Add HTTP/2 protocol options for gRPC
+	httpProtocolOpts := &httpproto.HttpProtocolOptions{
+		UpstreamProtocolOptions: &httpproto.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &httpproto.HttpProtocolOptions_ExplicitHttpConfig{
+				ProtocolConfig: &httpproto.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{},
+			},
+		},
+	}
+	httpProtocolOptsAny, _ := anypb.New(httpProtocolOpts)
+
+	extAuthzCluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
+		"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": httpProtocolOptsAny,
+	}
+
+	extAuthzAny, err := anypb.New(extAuthzCluster)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ext_authz_cluster: %w", err)
+	}
+	clusters = append(clusters, extAuthzAny)
+
+	// 2. dynamic_forward_proxy_cluster - for upstream connections
+	dynamicForwardProxyCluster := &cluster.Cluster{
+		Name:           "dynamic_forward_proxy_cluster",
+		ConnectTimeout: durationpb.New(10 * time.Second),
+		LbPolicy:       cluster.Cluster_CLUSTER_PROVIDED,
+		ClusterDiscoveryType: &cluster.Cluster_ClusterType{
+			ClusterType: &cluster.Cluster_CustomClusterType{
+				Name: "envoy.clusters.dynamic_forward_proxy",
+				TypedConfig: func() *anypb.Any {
+					// Properly wrap DnsCacheConfig in ClusterConfig
+					dfpClusterConfig := &dynamic_forward_proxy_cluster.ClusterConfig{
+						ClusterImplementationSpecifier: &dynamic_forward_proxy_cluster.ClusterConfig_DnsCacheConfig{
+							DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
+								Name:            "dynamic_forward_proxy_cache_config",
+								DnsLookupFamily: cluster.Cluster_V4_ONLY,
+								MaxHosts:        wrapperspb.UInt32(100),
+							},
+						},
+					}
+					any, _ := anypb.New(dfpClusterConfig)
+					return any
+				}(),
+			},
+		},
+		TransportSocket: &core.TransportSocket{
+			Name: "envoy.transport_sockets.tls",
+			ConfigType: &core.TransportSocket_TypedConfig{
+				TypedConfig: func() *anypb.Any {
+					upstreamTLS := &tlsv3.UpstreamTlsContext{
+						Sni: "{sni}",
+						CommonTlsContext: &tlsv3.CommonTlsContext{
+							ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
+								ValidationContext: &tlsv3.CertificateValidationContext{
+									TrustedCa: &core.DataSource{
+										Specifier: &core.DataSource_Filename{
+											Filename: "/etc/ssl/certs/ca-certificates.crt",
+										},
+									},
+								},
+							},
+						},
+					}
+					any, _ := anypb.New(upstreamTLS)
+					return any
+				}(),
+			},
+		},
+	}
+
+	dynamicForwardProxyAny, err := anypb.New(dynamicForwardProxyCluster)
+	if err != nil {
+		return fmt.Errorf("failed to marshal dynamic_forward_proxy_cluster: %w", err)
+	}
+	clusters = append(clusters, dynamicForwardProxyAny)
+
+	s.clusterCache = clusters
+	log.Printf("Cluster configuration built with %d clusters", len(clusters))
+	return nil
+}
+
+func (s *CDSServer) StreamClusters(stream clusterservice.ClusterDiscoveryService_StreamClustersServer) error {
+	log.Println("Client connected to StreamClusters")
+
+	for {
+		req, err := stream.Recv()
+		if err != nil {
+			log.Printf("Stream error: %v", err)
+			return err
+		}
+
+		log.Printf("Received CDS request: %+v", req)
+
+		s.mu.RLock()
+		resp := &discovery.DiscoveryResponse{
+			VersionInfo: fmt.Sprintf("%d", s.version),
+			Resources:   s.clusterCache,
+			TypeUrl:     resource.ClusterType,
+			Nonce:       fmt.Sprintf("%d", time.Now().UnixNano()),
+		}
+		s.mu.RUnlock()
+
+		if err := stream.Send(resp); err != nil {
+			log.Printf("Failed to send response: %v", err)
+			return err
+		}
+
+		log.Println("Sent cluster configuration")
+	}
+}
+
+func (s *CDSServer) DeltaClusters(clusterservice.ClusterDiscoveryService_DeltaClustersServer) error {
+	return fmt.Errorf("DeltaClusters not implemented")
+}
+
+func (s *CDSServer) FetchClusters(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
+	log.Printf("FetchClusters called with request: %+v", req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	resp := &discovery.DiscoveryResponse{
+		VersionInfo: fmt.Sprintf("%d", s.version),
+		Resources:   s.clusterCache,
+		TypeUrl:     resource.ClusterType,
+		Nonce:       fmt.Sprintf("%d", time.Now().UnixNano()),
+	}
+
+	return resp, nil
+}
+
 func main() {
 	log.Println("Starting SDS Service with xDS support...")
 
@@ -695,6 +899,11 @@ func main() {
 	opaURL := os.Getenv("OPA_URL")
 	if opaURL == "" {
 		opaURL = "http://localhost:15020"
+	}
+
+	opaGrpcPort := os.Getenv("OPA_GRPC_PORT")
+	if opaGrpcPort == "" {
+		opaGrpcPort = "15021"
 	}
 
 	caCertPath := os.Getenv("CA_CERT_PATH")
@@ -748,6 +957,12 @@ func main() {
 		log.Fatalf("Failed to create LDS server: %v", err)
 	}
 
+	// Create CDS server
+	cdsServer, err := NewCDSServer(opaGrpcPort)
+	if err != nil {
+		log.Fatalf("Failed to create CDS server: %v", err)
+	}
+
 	// Start HTTP server for health checks
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -765,6 +980,7 @@ func main() {
 	grpcServer := grpc.NewServer(grpc.Creds(insecure.NewCredentials()))
 	secret.RegisterSecretDiscoveryServiceServer(grpcServer, sdsServer)
 	listenerservice.RegisterListenerDiscoveryServiceServer(grpcServer, ldsServer)
+	clusterservice.RegisterClusterDiscoveryServiceServer(grpcServer, cdsServer)
 
 	// Start gRPC listener
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", grpcPort))
@@ -772,7 +988,7 @@ func main() {
 		log.Fatalf("Failed to listen on gRPC port: %v", err)
 	}
 
-	log.Printf("gRPC xDS Service (SDS + LDS) listening on port %s", grpcPort)
+	log.Printf("gRPC xDS Service (SDS + LDS + CDS) listening on port %s", grpcPort)
 
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Fatalf("Failed to serve gRPC: %v", err)

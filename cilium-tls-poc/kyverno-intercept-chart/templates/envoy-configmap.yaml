@@ -16,7 +16,8 @@ data:
           port_value: {{ .Values.envoy.adminPort }}
 
     {{- if .Values.sds.enabled }}
-    # Dynamic configuration via xDS from SDS service
+    # Full Dynamic configuration via xDS from SDS service
+    # Bootstrap contains ONLY xDS cluster - all other config comes from control plane
     dynamic_resources:
       lds_config:
         resource_api_version: V3
@@ -28,9 +29,19 @@ data:
               cluster_name: xds_cluster
           set_node_on_first_message_only: true
 
+      cds_config:
+        resource_api_version: V3
+        api_config_source:
+          api_type: GRPC
+          transport_api_version: V3
+          grpc_services:
+          - envoy_grpc:
+              cluster_name: xds_cluster
+          set_node_on_first_message_only: true
+
     static_resources:
       clusters:
-      # xDS control plane cluster (SDS service provides both LDS and SDS)
+      # ONLY xDS control plane cluster - everything else provided dynamically
       - name: xds_cluster
         connect_timeout: 1s
         type: STATIC
@@ -49,50 +60,6 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: {{ .Values.sds.grpcPort }}
-
-      # Dynamic forward proxy cluster for outbound connections
-      - name: dynamic_forward_proxy_cluster
-        connect_timeout: 10s
-        lb_policy: CLUSTER_PROVIDED
-        cluster_type:
-          name: envoy.clusters.dynamic_forward_proxy
-          typed_config:
-            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-            dns_cache_config:
-              name: dynamic_forward_proxy_cache_config
-              dns_lookup_family: V4_ONLY
-              max_hosts: 100
-        transport_socket:
-          name: envoy.transport_sockets.tls
-          typed_config:
-            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-            sni: "{sni}"
-            common_tls_context:
-              validation_context:
-                trusted_ca:
-                  filename: "/etc/ssl/certs/ca-certificates.crt"
-
-      {{- if .Values.opa.enabled }}
-      # OPA ext_authz cluster
-      - name: ext_authz_cluster
-        connect_timeout: 1s
-        type: STATIC
-        lb_policy: ROUND_ROBIN
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            explicit_http_config:
-              http2_protocol_options: {}
-        load_assignment:
-          cluster_name: ext_authz_cluster
-          endpoints:
-          - lb_endpoints:
-            - endpoint:
-                address:
-                  socket_address:
-                    address: 127.0.0.1
-                    port_value: {{ .Values.opa.grpcPort }}
-      {{- end }}
 
     layered_runtime:
       layers:
