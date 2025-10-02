@@ -1,7 +1,7 @@
 # Built binaries (local testing only)
-sds-service
-sds-service.gz
-sds-service-part-*
+xds-service
+xds-service.gz
+xds-service-part-*
 
 # Go build artifacts
 vendor/

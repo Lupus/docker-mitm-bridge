@@ -52,8 +52,8 @@ spec:
 
               ENVOY_UID={{ .Values.envoy.uid }}
               OPA_UID={{ .Values.opa.uid }}
-              {{- if .Values.sds.enabled }}
-              SDS_UID={{ .Values.sds.uid }}
+              {{- if .Values.xds.enabled }}
+              XDS_UID={{ .Values.xds.uid }}
               {{- end }}
               ENVOY_PROXY_PORT={{ .Values.envoy.port }}
 
@@ -66,8 +66,8 @@ spec:
               # CRITICAL: Exclude sidecar traffic to prevent infinite loops
               iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN
               iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN
-              {{- if .Values.sds.enabled }}
-              iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${SDS_UID} -j RETURN
+              {{- if .Values.xds.enabled }}
+              iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN
               {{- end }}
 
               # Redirect HTTP/HTTPS traffic to Envoy
@@ -87,8 +87,8 @@ spec:
               # Allow all traffic from Envoy/OPA/SDS sidecars
               iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT
               iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT
-              {{- if .Values.sds.enabled }}
-              iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${SDS_UID} -j ACCEPT
+              {{- if .Values.xds.enabled }}
+              iptables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${XDS_UID} -j ACCEPT
               {{- end }}
 
               # For main container accessing localhost:
@@ -246,15 +246,15 @@ spec:
               periodSeconds: 5
           {{- end }}
 
-          {{- if .Values.sds.enabled }}
-          - name: sds-service
-            image: "{{ .Values.sds.image.repository }}:{{ .Values.sds.image.tag }}"
-            imagePullPolicy: {{ .Values.sds.image.pullPolicy }}
+          {{- if .Values.xds.enabled }}
+          - name: xds-service
+            image: "{{ .Values.xds.image.repository }}:{{ .Values.xds.image.tag }}"
+            imagePullPolicy: {{ .Values.xds.image.pullPolicy }}
             env:
             - name: SDS_GRPC_PORT
-              value: "{{ .Values.sds.grpcPort }}"
+              value: "{{ .Values.xds.grpcPort }}"
             - name: SDS_HTTP_PORT
-              value: "{{ .Values.sds.httpPort }}"
+              value: "{{ .Values.xds.httpPort }}"
             - name: OPA_URL
               value: "http://localhost:{{ .Values.opa.port }}"
             - name: CA_CERT_PATH
@@ -263,16 +263,16 @@ spec:
               value: "/ca-secret/tls.key"
             ports:
             - name: grpc
-              containerPort: {{ .Values.sds.grpcPort }}
+              containerPort: {{ .Values.xds.grpcPort }}
               protocol: TCP
             - name: http
-              containerPort: {{ .Values.sds.httpPort }}
+              containerPort: {{ .Values.xds.httpPort }}
               protocol: TCP
             resources:
-              {{- toYaml .Values.sds.resources | nindent 14 }}
+              {{- toYaml .Values.xds.resources | nindent 14 }}
             securityContext:
-              runAsUser: {{ .Values.sds.uid }}
-              runAsGroup: {{ .Values.sds.gid }}
+              runAsUser: {{ .Values.xds.uid }}
+              runAsGroup: {{ .Values.xds.gid }}
               runAsNonRoot: true
               allowPrivilegeEscalation: false
               capabilities:
@@ -286,13 +286,13 @@ spec:
             livenessProbe:
               httpGet:
                 path: /health
-                port: {{ .Values.sds.httpPort }}
+                port: {{ .Values.xds.httpPort }}
               initialDelaySeconds: 5
               periodSeconds: 10
             readinessProbe:
               httpGet:
                 path: /health
-                port: {{ .Values.sds.httpPort }}
+                port: {{ .Values.xds.httpPort }}
               initialDelaySeconds: 2
               periodSeconds: 5
           {{- end }}
@@ -356,7 +356,7 @@ spec:
             value: opa-sidecar
           - key: "{{ `{{ element.name }}` }}"
             operator: NotEquals
-            value: sds-service
+            value: xds-service
         patchStrategicMerge:
           spec:
             containers:

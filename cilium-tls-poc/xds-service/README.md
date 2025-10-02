@@ -108,8 +108,8 @@ kubectl create namespace kyverno-intercept
 kubectl apply -f k8s/
 
 # Verify deployment
-kubectl get pods -n kyverno-intercept -l app=sds-service
-kubectl logs -n kyverno-intercept -l app=sds-service
+kubectl get pods -n kyverno-intercept -l app=xds-service
+kubectl logs -n kyverno-intercept -l app=xds-service
 ```
 
 ### Full Rebuild and Redeploy
@@ -238,20 +238,20 @@ kubectl apply -f k8s/test-pod.yaml
 ```
 
 This creates:
-- Envoy proxy configured to use SDS
+- Envoy proxy configured to use xDS
 - Test client container for making requests
 
 ### Test Certificate Generation
 
 ```bash
-# Check Envoy logs to see SDS communication
-kubectl logs -n kyverno-intercept sds-test -c envoy | grep -i sds
+# Check Envoy logs to see xDS/SDS communication
+kubectl logs -n kyverno-intercept xds-test -c envoy | grep -i sds
 
-# Check SDS service logs to see certificate generation
-kubectl logs -n kyverno-intercept -l app=sds-service | grep "Generating"
+# Check xDS service logs to see certificate generation
+kubectl logs -n kyverno-intercept -l app=xds-service | grep "Generating"
 
 # Access Envoy admin interface
-kubectl port-forward -n kyverno-intercept pod/sds-test 15000:15000
+kubectl port-forward -n kyverno-intercept pod/xds-test 15000:15000
 curl http://localhost:15000/config_dump | jq '.configs[] | select(.["@type"] | contains("Secret"))'
 ```
 
@@ -299,7 +299,7 @@ env:
 
 1. **Domain list at startup**: All domains must be in OPA policy before pod starts
 2. **No dynamic discovery**: Cannot intercept new domains without pod restart
-3. **In-memory certificates**: Certificate cache lost on SDS service restart
+3. **In-memory certificates**: Certificate cache lost on xDS service restart
 4. **Single CA**: Uses shared CA from Secret, no per-domain CA support
 5. **No certificate rotation**: Certificates valid for 1 year, no automatic renewal
 
@@ -350,7 +350,7 @@ Possible enhancements:
 ### File Structure
 
 ```
-sds-service/
+xds-service/
 ├── main.go              # Main entry point, initialization
 ├── Dockerfile           # Multi-stage build (Go → scratch)
 ├── docker-build-push.sh # Build and push script
@@ -360,35 +360,35 @@ sds-service/
 
 ## Troubleshooting
 
-### SDS service not starting
+### xDS service not starting
 
 ```bash
 # Check pod status
-kubectl get pods -n kyverno-intercept -l app=sds-service
+kubectl get pods -n kyverno-intercept -l app=xds-service
 
 # Check logs
-kubectl logs -n kyverno-intercept -l app=sds-service
+kubectl logs -n kyverno-intercept -l app=xds-service
 
 # Check events
 kubectl get events -n kyverno-intercept --field-selector involvedObject.kind=Pod
 
 # Check if image was pulled successfully
-kubectl describe pod -n kyverno-intercept -l app=sds-service | grep -A 5 "Events:"
+kubectl describe pod -n kyverno-intercept -l app=xds-service | grep -A 5 "Events:"
 ```
 
-### Envoy not connecting to SDS
+### Envoy not connecting to xDS
 
 ```bash
 # Check Envoy logs
-kubectl logs -n kyverno-intercept <pod-name> -c envoy-proxy | grep SDS
+kubectl logs -n kyverno-intercept <pod-name> -c envoy-proxy | grep xDS
 
 # Verify service DNS resolution
 kubectl exec -n kyverno-intercept <pod-name> -c envoy-proxy -- \
-  nslookup sds-service.kyverno-intercept.svc.cluster.local
+  nslookup xds-service.kyverno-intercept.svc.cluster.local
 
 # Check gRPC connectivity
 kubectl exec -n kyverno-intercept <pod-name> -c envoy-proxy -- \
-  nc -zv sds-service.kyverno-intercept.svc.cluster.local 8080
+  nc -zv xds-service.kyverno-intercept.svc.cluster.local 8080
 ```
 
 ## License

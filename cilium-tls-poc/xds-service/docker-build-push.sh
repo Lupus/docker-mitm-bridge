@@ -2,7 +2,7 @@
 
 set -e
 
-IMAGE_NAME="ghcr.io/lupus/docker-mitm-bridge/sds-service:latest"
+IMAGE_NAME="ghcr.io/lupus/docker-mitm-bridge/xds-service:latest"
 
 echo "Building Docker image: $IMAGE_NAME"
 docker build -t "$IMAGE_NAME" .

@@ -883,7 +883,7 @@ func (s *CDSServer) FetchClusters(ctx context.Context, req *discovery.DiscoveryR
 }
 
 func main() {
-	log.Println("Starting SDS Service with xDS support...")
+	log.Println("Starting xDS Control Plane (CDS+LDS+SDS)...")
 
 	// Get configuration from environment
 	grpcPort := os.Getenv("SDS_GRPC_PORT")
@@ -988,7 +988,7 @@ func main() {
 		log.Fatalf("Failed to listen on gRPC port: %v", err)
 	}
 
-	log.Printf("gRPC xDS Service (SDS + LDS + CDS) listening on port %s", grpcPort)
+	log.Printf("gRPC xDS Control Plane (CDS+LDS+SDS) listening on port %s", grpcPort)
 
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Fatalf("Failed to serve gRPC: %v", err)

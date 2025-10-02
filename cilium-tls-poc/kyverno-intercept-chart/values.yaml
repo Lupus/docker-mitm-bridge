@@ -58,14 +58,14 @@ envoy:
   gid: 101
   logLevel: info
 
-# SDS (Secret Discovery Service) configuration
-sds:
+# xDS (Control Plane) configuration
+xds:
   enabled: true
   image:
-    repository: ghcr.io/lupus/docker-mitm-bridge/sds-service
+    repository: ghcr.io/lupus/docker-mitm-bridge/xds-service
     tag: latest
     pullPolicy: Always
-  grpcPort: 15080   # gRPC port for SDS (sidecar infrastructure range)
+  grpcPort: 15080   # gRPC port for xDS (sidecar infrastructure range)
   httpPort: 15081   # HTTP port for CA distribution
   uid: 103          # Run as non-root user
   gid: 103

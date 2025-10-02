@@ -1,4 +1,4 @@
-module github.com/lupus/docker-mitm-bridge/sds-service
+module github.com/lupus/docker-mitm-bridge/xds-service
 
 go 1.21
 
