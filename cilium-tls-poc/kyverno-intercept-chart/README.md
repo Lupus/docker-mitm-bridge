@@ -27,7 +27,7 @@ This Helm chart provides a complete TLS interception solution that:
 │ Envoy Sidecar (UID 101):                        │
 │ • Proxy port: 15001 (HTTPS traffic)             │
 │ • Admin port: 15000 (metrics/config)            │
-│ • Dynamic xDS config from SDS service           │
+│ • Dynamic xDS config from xDS service           │
 │ • TLS termination with internal CA              │
 │ • gRPC ext_authz to OPA                         │
 │ • Dynamic forward proxy for upstream            │
@@ -38,7 +38,7 @@ This Helm chart provides a complete TLS interception solution that:
 │ • gRPC authz: 15021 (Envoy queries)             │
 │ • Policy evaluation and decision logs           │
 ├──────────────────────────────────────────────────┤
-│ SDS Service (UID 103):                          │
+│ xDS Service (UID 103):                          │
 │ • xDS control plane: 15090 (CDS+LDS+SDS)        │
 │ • Queries OPA for domain list on startup        │
 │ • Pre-generates certificates for all domains    │
@@ -265,17 +265,17 @@ kubectl exec -n kyverno-intercept deploy/test-app -c test -- id
 - CA certificate distributed to all pods via init container
 
 **On Pod Startup:**
-- SDS service sidecar starts and loads CA from Secret
-- SDS queries OPA's `required_domains` rule to get full domain list
-- SDS pre-generates TLS certificates for all required domains
+- xDS service sidecar starts and loads CA from Secret
+- xDS queries OPA's `required_domains` rule to get full domain list
+- xDS pre-generates TLS certificates for all required domains
 - Certificates cached in memory for Envoy to request
 
 ### 2. Sidecar Injection
 When a pod with label `intercept-proxy/enabled: true` is created:
 - **Init Container**: Sets up iptables rules for traffic redirection and port isolation, installs CA
-- **Envoy Sidecar**: Minimal bootstrap, connects to SDS service for full dynamic xDS configuration
+- **Envoy Sidecar**: Minimal bootstrap, connects to xDS service for full dynamic xDS configuration
 - **OPA Sidecar**: Provides policy evaluation and domain list aggregation
-- **SDS Service**: Acts as full xDS control plane (CDS+LDS+SDS) serving all dynamic configuration
+- **xDS Service**: Acts as full xDS control plane (CDS+LDS+SDS) serving all dynamic configuration
 
 ### 3. Dynamic Configuration Flow
 
@@ -485,7 +485,7 @@ kubectl get pod <pod-name> -n kyverno-intercept -o jsonpath='{.spec.containers[?
      - Fix: Set `securityContext.runAsUser` to different UID (e.g., 12345)
    - Verify iptables rules in init container logs
    - Check Envoy is listening on port 15001
-   - Verify SDS service logs show certificates were generated
+   - Verify xDS service logs show certificates were generated
 
 4. **OPA container restarting**
    - Check liveness probe configuration matches OPA port (15020)
@@ -515,7 +515,7 @@ This chart follows security and operational best practices:
 
 - Requires domains configured in OPA policy (via `required_domains` rule)
 - All domains must be known at pod startup (no dynamic domain discovery)
-- Certificates cached in memory only (lost on SDS service restart)
+- Certificates cached in memory only (lost on xDS service restart)
 - CA regenerated on chart upgrade (all existing certificates become invalid)
 - iptables rules require init container with NET_ADMIN capability
 - Application containers must NOT use UIDs 101, 102, or 103 (reserved for sidecars)

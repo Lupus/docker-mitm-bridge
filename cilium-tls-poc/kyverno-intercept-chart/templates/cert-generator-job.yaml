@@ -73,7 +73,7 @@ spec:
           fi
 
           echo "CA generation completed successfully!"
-          echo "Domain-specific certificates will be generated dynamically by the SDS service."
+          echo "Domain-specific certificates will be generated dynamically by the xDS service."
         volumeMounts:
         - name: work
           mountPath: /work

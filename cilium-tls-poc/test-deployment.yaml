@@ -22,7 +22,7 @@ spec:
       # Sidecar UIDs (reserved, do NOT use for application):
       #   - 101: Envoy proxy
       #   - 102: OPA sidecar
-      #   - 103: SDS service
+      #   - 103: xDS service
       #
       # If your container runs as one of these UIDs, traffic will bypass interception
       # due to iptables UID-based exclusion rules (prevents infinite loops)

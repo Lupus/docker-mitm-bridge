@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sds-service
+  name: xds-service
   namespace: kyverno-intercept
   labels:
-    app: sds-service
+    app: xds-service
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: sds-service
+      app: xds-service
   template:
     metadata:
       labels:
-        app: sds-service
+        app: xds-service
     spec:
       containers:
-      - name: sds-service
-        image: ghcr.io/lupus/docker-mitm-bridge/sds-service:latest
+      - name: xds-service
+        image: ghcr.io/lupus/docker-mitm-bridge/xds-service:latest
         imagePullPolicy: Always
         env:
         - name: SDS_GRPC_PORT
