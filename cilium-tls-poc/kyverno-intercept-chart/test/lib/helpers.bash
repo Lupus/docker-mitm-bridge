@@ -155,8 +155,18 @@ get_container_uid() {
     local container=$2
     local namespace=${3:-kyverno-intercept}
 
-    kubectl get pod "$pod_name" -n "$namespace" \
-        -o jsonpath="{.spec.containers[?(@.name=='$container')].securityContext.runAsUser}" 2>/dev/null
+    # First try container-level security context
+    local uid
+    uid=$(kubectl get pod "$pod_name" -n "$namespace" \
+        -o jsonpath="{.spec.containers[?(@.name=='$container')].securityContext.runAsUser}" 2>/dev/null)
+
+    # If not found, fall back to pod-level security context
+    if [ -z "$uid" ]; then
+        uid=$(kubectl get pod "$pod_name" -n "$namespace" \
+            -o jsonpath="{.spec.securityContext.runAsUser}" 2>/dev/null)
+    fi
+
+    echo "$uid"
 }
 
 # Check if init container completed successfully
