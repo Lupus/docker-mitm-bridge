@@ -26,15 +26,15 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     # Deploy test pod
     kubectl apply -f test/fixtures/test-pod.yaml
 
-    # Wait for pod to be ready
+    # Wait for pod to be ready (all containers pass readiness probes)
     log_info "Waiting for test-app pod to be ready..."
-    try "at most 10 times every 15s to get pods named 'test-app' and verify that 'status' is 'running'"
+    try "at most 10 times every 15s to get pods named 'test-app' and verify that '.status.conditions[?(@.type==\"Ready\")].status' is 'True'"
 
     # Get pod name
     POD_NAME=$(get_pod_name "test-app")
     log_info "Test pod name: $POD_NAME"
 
-    # Verify pod is running
+    # Verify pod name exists
     [ -n "$POD_NAME" ]
 }
 
@@ -119,6 +119,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     # Note: We can't check from test-container because proxy-init blocks sidecar ports
     ENVOY_READY=$(kubectl get pod "$POD_NAME" -n kyverno-intercept \
         -o jsonpath='{.status.containerStatuses[?(@.name=="envoy-proxy")].ready}')
+    log_info "Envoy ready status: $ENVOY_READY"
     [ "$ENVOY_READY" = "true" ]
 
     # Verify Envoy is receiving xDS updates (check logs)
