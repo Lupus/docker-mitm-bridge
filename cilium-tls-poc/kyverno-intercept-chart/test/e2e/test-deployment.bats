@@ -19,8 +19,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     verify "there is 1 configmap named 'intercept-proxy-opa-policy'"
     verify "there is 1 configmap named 'intercept-proxy-opa-config'"
 
-    # Verify CA Secret exists
-    verify "there is 1 secret named 'intercept-proxy-ca'"
+    # Note: CA is now generated inline in emptyDir, not stored as Secret
 }
 
 @test "Test pod deploys successfully with sidecar injection" {
