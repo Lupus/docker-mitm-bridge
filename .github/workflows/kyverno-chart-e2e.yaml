@@ -77,11 +77,7 @@ jobs:
             --timeout 5m \
             --set testWorkload.enabled=false
 
-          echo "Waiting for certificate generation..."
-          kubectl wait --for=condition=complete job \
-            -l app.kubernetes.io/instance=intercept-proxy \
-            -n kyverno-intercept \
-            --timeout=120s || true
+          echo "Chart installed, CA will be generated inline by init containers"
 
       - name: Verify chart installation
         run: |
