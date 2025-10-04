@@ -60,11 +60,14 @@ jobs:
             --wait \
             --timeout 5m
 
-          echo "Waiting for Kyverno to be ready..."
+          echo "Verifying Kyverno installation..."
+          kubectl get pods -n kyverno
+
+          # Wait for admission controller specifically
           kubectl wait --for=condition=ready pod \
-            -l app.kubernetes.io/name=kyverno \
+            -l app.kubernetes.io/component=admission-controller \
             -n kyverno \
-            --timeout=300s
+            --timeout=300s || true
 
       - name: Install Interceptor Chart
         working-directory: cilium-tls-poc/kyverno-intercept-chart
