@@ -51,6 +51,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     log_info "Testing raw.githubusercontent.com..."
     run exec_in_pod "$POD_NAME" "test-container" \
         "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://raw.githubusercontent.com"
+    log_info "raw.githubusercontent.com exit status: $status, HTTP code: $output"
     [ "$status" -eq 0 ]
     # 404 is OK, means TLS worked but path doesn't exist
     [[ "$output" =~ ^(200|404)$ ]]
@@ -98,6 +99,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     log_info "Testing HTTP request redirection..."
     run exec_in_pod "$POD_NAME" "test-container" \
         "curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://api.github.com"
+    log_info "HTTP request exit status: $status, HTTP code: $output"
 
     # Should succeed (might redirect to HTTPS)
     [ "$status" -eq 0 ]
