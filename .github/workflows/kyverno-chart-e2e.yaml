@@ -37,7 +37,7 @@ jobs:
 
       - name: Install BATS
         run: |
-          npm install -g bats
+          sudo npm install -g bats
 
       - name: Create kind cluster
         uses: helm/kind-action@v1.12.0
