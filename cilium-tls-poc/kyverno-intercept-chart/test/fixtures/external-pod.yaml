@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-app
+  namespace: kyverno-intercept
+  labels:
+    app: external-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: external-app
+  template:
+    metadata:
+      labels:
+        app: external-app
+        # NO intercept-proxy/enabled label - no sidecar injection
+    spec:
+      securityContext:
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      containers:
+      - name: external-container
+        image: nicolaka/netshoot:latest
+        command:
+          - sh
+          - -c
+          - |
+            echo "External pod (no interception) started"
+            # Keep pod running
+            while true; do sleep 3600; done
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "20m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-app
+  namespace: kyverno-intercept
+spec:
+  selector:
+    app: external-app
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
