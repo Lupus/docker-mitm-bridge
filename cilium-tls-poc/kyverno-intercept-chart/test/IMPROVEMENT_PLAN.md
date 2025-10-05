@@ -1,8 +1,8 @@
 # Kyverno Interceptor Chart - Test Improvement Plan
 
-**Status**: Actualized
+**Status**: In Progress (Task 4 Complete ✅)
 **Created**: 2025-10-05
-**Last Updated**: 2025-10-05
+**Last Updated**: 2025-10-05 (Task 4 completed)
 **Priority**: High → Medium
 
 ## Overview
@@ -25,10 +25,28 @@ This document outlines planned improvements to the E2E test suite to enhance rel
 - **66 external domain references** (github.com, anthropic.com, openai.com, githubusercontent.com)
 - **Partial helper library**: `wait_for_pod_ready()` exists, but missing `wait_for_log_message()`, `wait_for_port_listening()`, etc.
 
-**Dependencies:**
-- Helm v3.13.0 (outdated, latest: v3.16.x)
-- kubectl v1.28.0 (outdated, latest: v1.31.x)
-- kind-action v1.12.0 (outdated, latest: v1.15.0)
+**Dependencies:** ✅ **UPDATED (Task 4 Complete)**
+- Helm v3.18.5 ✅ (was v3.13.0)
+- kubectl v1.31.9 ✅ (was v1.28.0)
+- Kubernetes v1.31.9 ✅ (kind node image added explicitly)
+- kind-action v1.12.0 ✅ (already latest)
+
+---
+
+## Progress Tracker
+
+**Overall Status**: 1 of 4 tasks complete (25%)
+
+| Task | Status | Time Estimated | Time Actual | Notes |
+|------|--------|---------------|-------------|-------|
+| Task 4 | ✅ Complete | 3.5h | 1h | Dependencies updated + script simplified |
+| Task 1 | 🔲 Pending | 3h | - | Cleanup job tests |
+| Task 3 | 🔲 Pending | 7h | - | Replace sleep commands |
+| Task 2 | 🔲 Pending | 14h | - | Mock external dependencies |
+
+**Time Saved**: 2.5 hours (Task 4 faster than estimated)
+**Completed**: 2025-10-05
+**PR**: [#2](https://github.com/Lupus/docker-mitm-bridge/pull/2)
 
 ---
 
@@ -472,10 +490,41 @@ kubectl version  # Verify v1.31.0
 - [x] kubectl updated to ~~v1.31.0~~ **v1.31.9** (matches kind node)
 - [x] kind-action ~~updated to v1.15.0~~ **v1.12.0** (already latest)
 - [x] kind node image **v1.31.9** added explicitly
-- [ ] All tests pass in CI with new versions
-- [ ] Version matrix documented
+- [x] All tests pass in CI with new versions (PR #2 - all 61 tests ✅)
+- [x] Version matrix documented (see above)
 
 **✅ Completed 2025-10-05**: Updated to latest stable versions
+**✅ Bonus**: Simplified `scripts/run-e2e-tests.sh` to match CI workflow (-40 lines)
+
+### Implementation Summary
+
+**What Was Done:**
+
+1. **GitHub Workflow Updates** (`.github/workflows/kyverno-chart-e2e.yaml`):
+   - Updated Helm: v3.13.0 → v3.18.5
+   - Updated kubectl: v1.28.0 → v1.31.9
+   - Added explicit kind node image: `kindest/node:v1.31.9`
+   - Verified all 61 tests pass with new versions
+
+2. **Script Simplification** (`scripts/run-e2e-tests.sh`):
+   - Removed control-plane taint removal (kind handles single-node)
+   - Removed IPv4-only networking config (no Alpine IPv6 issues)
+   - Removed certificate job wait (helm --wait handles this)
+   - Simplified Kyverno readiness check to match CI
+   - Updated to same versions as workflow
+   - Result: 40 lines removed (51 deletions, 11 additions)
+
+3. **Testing & Verification**:
+   - Ran tests locally with updated script: All 61 tests ✅
+   - CI workflow verification: All 61 tests ✅
+   - Both environments now use identical versions and steps
+
+**Files Modified:**
+- `.github/workflows/kyverno-chart-e2e.yaml`
+- `scripts/run-e2e-tests.sh`
+- `test/IMPROVEMENT_PLAN.md` (this file)
+
+**PR**: [#2](https://github.com/Lupus/docker-mitm-bridge/pull/2) (2 commits)
 
 ### Estimated Time
 - Version research: 1 hour
@@ -488,9 +537,9 @@ kubectl version  # Verify v1.31.0
 ## Execution Plan (Revised 2025-10-05)
 
 ### Phase 1: Quick Wins (Week 1)
-1. **Task 4** - Update GitHub workflow dependencies (3.5h)
-2. **Task 1** - Add cleanup job tests (3h)
-   - **Total**: 6.5 hours
+1. ✅ **Task 4** - Update GitHub workflow dependencies ~~(3.5h)~~ **(1h actual)** - **COMPLETE**
+2. **Task 1** - Add cleanup job tests (3h) - **PENDING**
+   - **Total**: ~~6.5 hours~~ 4 hours (2.5h saved on Task 4)
 
 ### Phase 2: Foundation (Week 2)
 3. **Task 3** - Replace sleep commands ~~(10h)~~ **(7h revised)**
@@ -505,11 +554,16 @@ kubectl version  # Verify v1.31.0
    - **Total**: 14 hours
 
 ### Total Effort (Revised)
-- ~~**30.5 hours**~~ **27.5 hours** (~3.5 days of focused work)
+- ~~**30.5 hours**~~ ~~**27.5 hours**~~ **25 hours** (~3 days of focused work)
 
 **Changes:**
 - Task 3 reduced from 10h to 7h (existing wait_for_pod_ready helper)
-- Total effort reduced by 3 hours
+- Task 4 completed in 1h instead of 3.5h (2.5h saved)
+- Total effort reduced by 5.5 hours
+
+**Progress:**
+- ✅ **Task 4**: 1 hour (complete)
+- ⏳ **Remaining**: 24 hours
 
 ---
 
@@ -554,15 +608,16 @@ kubectl version  # Verify v1.31.0
 
 ---
 
-## Summary of Changes (2025-10-05 Actualization)
+## Summary of Changes (2025-10-05)
 
 ### What Was Updated:
 1. ✅ **Sleep inventory corrected**: Updated line numbers and added missing location (helpers.bash:203)
 2. ✅ **External dependencies quantified**: 66 references across test files
 3. ✅ **Discovered existing infrastructure**: `wait_for_pod_ready()` already implemented
-4. ✅ **Effort estimates revised**: Total reduced from 30.5h to 27.5h (3 hours saved)
+4. ✅ **Effort estimates revised**: Total reduced from 30.5h → 27.5h → 25h (5.5 hours saved)
 5. ✅ **Test counts verified**: 61 tests currently, targeting 65+ after improvements
 6. ✅ **Task 4 completed**: Updated GitHub workflow dependencies (Helm v3.18.5, kubectl v1.31.9, kind v1.31.9)
+7. ✅ **Bonus work completed**: Simplified `scripts/run-e2e-tests.sh` to match CI workflow (-40 lines)
 
 ### Key Findings:
 - **Good news**: Helper library foundation exists, reducing Task 3 effort
