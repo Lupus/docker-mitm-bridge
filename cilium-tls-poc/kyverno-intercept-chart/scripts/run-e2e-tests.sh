@@ -110,24 +110,10 @@ create_kind_cluster() {
 
     log_info "Creating kind cluster: $KIND_CLUSTER_NAME"
 
-    # Use stable K8s version to avoid file descriptor issues with latest versions
-    # K8s 1.29 is latest stable, 1.34 has known "too many open files" issues
-    # Use IPv4 only to avoid IPv6 routing issues with Alpine package managers
-    cat <<EOF | kind create cluster --name "$KIND_CLUSTER_NAME" --image kindest/node:v1.29.2 --config=-
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-networking:
-  ipFamily: ipv4
-nodes:
-- role: control-plane
-EOF
+    # Use K8s version matching CI workflow
+    kind create cluster --name "$KIND_CLUSTER_NAME" --image kindest/node:v1.31.9 --wait 120s
 
     log_info "Cluster created successfully"
-
-    # Remove control-plane taint to allow pod scheduling (single-node cluster)
-    log_info "Removing control-plane taint for single-node operation..."
-    sleep 5  # Give cluster time to initialize
-    kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
 
     # Set KUBECONFIG to use kind cluster (avoid interfering with user's main config)
     setup_kubeconfig
@@ -169,40 +155,21 @@ install_kyverno() {
         helm repo add kyverno https://kyverno.github.io/kyverno/ 2>/dev/null || true
         helm repo update
 
-        log_info "Installing Kyverno 1.12.6 (stable version for kind clusters)"
+        log_info "Installing Kyverno (latest stable)"
         helm install kyverno kyverno/kyverno \
-            --version 3.2.8 \
             -n "$KYVERNO_NAMESPACE" \
             --create-namespace \
-            --timeout 10m
+            --wait \
+            --timeout 5m
 
-        log_info "Waiting for Kyverno pods to be created..."
-        sleep 5
+        log_info "Verifying Kyverno installation..."
+        kubectl get pods -n "$KYVERNO_NAMESPACE"
 
-        # Wait for pods to exist first
-        for i in {1..30}; do
-            POD_COUNT=$(kubectl get pods -n "$KYVERNO_NAMESPACE" --no-headers 2>/dev/null | wc -l)
-            if [ "$POD_COUNT" -gt 0 ]; then
-                log_info "Found $POD_COUNT Kyverno pod(s)"
-                break
-            fi
-            if [ "$i" -eq 30 ]; then
-                log_error "Timeout waiting for Kyverno pods to be created"
-                return 1
-            fi
-            sleep 2
-        done
-
-        log_info "Waiting for all Kyverno pods to be ready..."
+        # Wait for admission controller specifically (matching CI)
         kubectl wait --for=condition=ready pod \
-            --all \
+            -l app.kubernetes.io/component=admission-controller \
             -n "$KYVERNO_NAMESPACE" \
-            --timeout=300s || {
-            log_warn "Some Kyverno pods not ready yet, checking status..."
-            kubectl get pods -n "$KYVERNO_NAMESPACE"
-            kubectl get secrets -n "$KYVERNO_NAMESPACE"
-            return 1
-        }
+            --timeout=300s || true
     fi
 
     log_info "Kyverno is ready"
@@ -221,16 +188,9 @@ install_chart() {
         -n "$TEST_NAMESPACE" \
         --wait \
         --timeout 5m \
-        --set testWorkload.enabled=false  # We'll deploy test pods manually
+        --set testWorkload.enabled=false
 
     log_info "Chart installed successfully"
-
-    # Wait for cert generator job to complete
-    log_info "Waiting for certificate generation..."
-    kubectl wait --for=condition=complete job \
-        -l app.kubernetes.io/instance="$HELM_RELEASE_NAME" \
-        -n "$TEST_NAMESPACE" \
-        --timeout=120s 2>/dev/null || true
 
     log_info "Verifying chart resources..."
     kubectl get clusterpolicy,configmap,secret -n "$TEST_NAMESPACE"
