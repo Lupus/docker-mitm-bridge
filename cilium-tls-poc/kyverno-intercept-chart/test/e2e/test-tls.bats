@@ -53,8 +53,8 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
         "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://raw.githubusercontent.com"
     log_info "raw.githubusercontent.com exit status: $status, HTTP code: $output"
     [ "$status" -eq 0 ]
-    # 404 is OK, means TLS worked but path doesn't exist
-    [[ "$output" =~ ^(200|404)$ ]]
+    # 301/404 is OK, means TLS worked (301=redirect, 404=path doesn't exist)
+    [[ "$output" =~ ^(200|301|404)$ ]]
 }
 
 @test "Traffic flows through Envoy proxy" {
