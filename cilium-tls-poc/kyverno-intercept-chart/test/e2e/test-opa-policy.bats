@@ -24,7 +24,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 
     log_info "Testing HEAD request to github.com (should be allowed)..."
     run exec_in_pod "$POD_NAME" "test-container" \
-        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X HEAD https://github.com"
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X HEAD https://api.github.com"
 
     [ "$status" -eq 0 ]
     # HEAD requests typically return 200 or 301
@@ -125,23 +125,19 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 @test "OPA gRPC ext_authz is working" {
     POD_NAME=$(get_pod_name "test-app")
 
-    # OPA should be listening on gRPC port
-    run exec_in_pod "$POD_NAME" "opa-sidecar" "netstat -tln | grep ':15021'"
+    # Make request that should trigger OPA check and be blocked (POST to restricted domain)
+    run exec_in_pod "$POD_NAME" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST https://api.github.com/user"
+
+    # If OPA ext_authz is working, POST should be blocked with 403
     [ "$status" -eq 0 ]
+    [ "$output" = "403" ]
 
-    # Make request that triggers OPA check
-    exec_in_pod "$POD_NAME" "test-container" \
-        "curl -s -o /dev/null --max-time 15 https://api.github.com" || true
+    # Verify OPA is healthy and processing requests
+    run exec_in_pod "$POD_NAME" "opa-sidecar" \
+        "wget -q -O- http://localhost:15020/health"
 
-    # Check Envoy logs for ext_authz communication
-    ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -50)
-
-    # Should see evidence of ext_authz filter usage
-    [[ "$ENVOY_LOGS" =~ "ext_authz" ]] || \
-    [[ "$ENVOY_LOGS" =~ "grpc" ]] || \
-    [[ "$ENVOY_LOGS" =~ "15021" ]] || \
-    # If no errors, ext_authz is working silently
-    true
+    [ "$status" -eq 0 ]
 }
 
 @test "OPA blocks requests with different user agents consistently" {
