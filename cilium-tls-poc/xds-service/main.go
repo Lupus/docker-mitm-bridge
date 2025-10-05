@@ -576,6 +576,91 @@ func (s *LDSServer) buildListener() error {
 		filterChains = append(filterChains, filterChain)
 	}
 
+	// Add default filter chain for non-TLS traffic (HTTP on port 80)
+	log.Println("Adding default filter chain for HTTP traffic...")
+
+	// Create HTTP Connection Manager for plain HTTP
+	httpManager := &hcm.HttpConnectionManager{
+		CodecType:  hcm.HttpConnectionManager_AUTO,
+		StatPrefix: "ingress_http_plain",
+		RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
+			RouteConfig: &route.RouteConfiguration{
+				Name: "local_route_http",
+				VirtualHosts: []*route.VirtualHost{
+					{
+						Name:    "http_vhost",
+						Domains: []string{"*"},
+						Routes: []*route.Route{
+							{
+								Match: &route.RouteMatch{
+									PathSpecifier: &route.RouteMatch_Prefix{
+										Prefix: "/",
+									},
+								},
+								Action: &route.Route_Route{
+									Route: &route.RouteAction{
+										ClusterSpecifier: &route.RouteAction_Cluster{
+											Cluster: "dynamic_forward_proxy_cluster",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		HttpFilters: []*hcm.HttpFilter{
+			{
+				Name: "envoy.filters.http.dynamic_forward_proxy",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: func() *anypb.Any {
+						dfpFilterConfig := &dynamic_forward_proxy.FilterConfig{
+							ImplementationSpecifier: &dynamic_forward_proxy.FilterConfig_DnsCacheConfig{
+								DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
+									Name:            "dynamic_forward_proxy_cache_config",
+									DnsLookupFamily: cluster.Cluster_V4_ONLY,
+									MaxHosts:        wrapperspb.UInt32(100),
+								},
+							},
+						}
+						any, _ := anypb.New(dfpFilterConfig)
+						return any
+					}(),
+				},
+			},
+			{
+				Name: "envoy.filters.http.router",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: func() *anypb.Any {
+						routerConfig := &router.Router{}
+						any, _ := anypb.New(routerConfig)
+						return any
+					}(),
+				},
+			},
+		},
+	}
+
+	httpManagerAny, err := anypb.New(httpManager)
+	if err != nil {
+		return fmt.Errorf("failed to marshal http connection manager: %w", err)
+	}
+
+	// Default filter chain (no match criteria - matches everything that didn't match TLS chains)
+	defaultFilterChain := &listener.FilterChain{
+		Filters: []*listener.Filter{
+			{
+				Name: wellknown.HTTPConnectionManager,
+				ConfigType: &listener.Filter_TypedConfig{
+					TypedConfig: httpManagerAny,
+				},
+			},
+		},
+	}
+
+	filterChains = append(filterChains, defaultFilterChain)
+
 	// Create TLS inspector listener filter to extract SNI
 	tlsInspectorConfig := &tls_inspector.TlsInspector{}
 	tlsInspectorAny, err := anypb.New(tlsInspectorConfig)
