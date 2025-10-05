@@ -36,10 +36,30 @@ spec:
             - |
               set -ex
 
-              # Install CA certificate from Secret
-              echo "Installing CA certificate..."
+              # Generate or load CA certificate
+              echo "Setting up CA certificate..."
 
-              # Copy CA cert to shared volume
+              # Check if CA already exists in the shared volume
+              if [ -f /ca-secret/tls.crt ] && [ -f /ca-secret/tls.key ]; then
+                echo "CA already exists, using existing CA"
+              else
+                echo "Generating new CA certificate..."
+
+                # Generate CA private key
+                openssl genrsa -out /ca-secret/tls.key 2048
+
+                # Generate CA certificate (self-signed, valid for 10 years)
+                openssl req -new -x509 -key /ca-secret/tls.key -out /ca-secret/tls.crt -days 3650 \
+                  -subj "/C=US/ST=CA/O=Internal-CA/CN=Kyverno-Intercept-CA"
+
+                echo "CA certificate generated successfully"
+              fi
+
+              # Set permissions so xDS service (UID 103) can read the CA files
+              chmod 644 /ca-secret/tls.crt
+              chmod 644 /ca-secret/tls.key
+
+              # Copy CA cert to shared volume for application containers
               cp /ca-secret/tls.crt /shared-ca-certs/intercept-ca.crt
 
               # Merge with system certificates for containers that need it
@@ -136,7 +156,7 @@ spec:
             volumeMounts:
             - name: ca-secret
               mountPath: /ca-secret
-              readOnly: true
+              readOnly: false  # Init container needs write access to generate CA
             - name: ca-certificates
               mountPath: /shared-ca-certs
 
@@ -282,7 +302,7 @@ spec:
             volumeMounts:
             - name: ca-secret
               mountPath: /ca-secret
-              readOnly: true
+              readOnly: false  # xDS needs write access to generate CA
             livenessProbe:
               httpGet:
                 path: /health
@@ -312,9 +332,7 @@ spec:
         spec:
           volumes:
           - name: ca-secret
-            secret:
-              secretName: {{ .Release.Name }}-ca
-              defaultMode: 0444
+            emptyDir: {}  # xDS service generates CA at runtime and writes it here
           - name: ca-certificates
             emptyDir: {}
           - name: ca-certificates-system

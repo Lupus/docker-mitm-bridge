@@ -28,6 +28,7 @@ build/
 # Configuration
 config.yaml
 *.local/
+*.local.*
 
 # OS
 .DS_Store
