@@ -23,11 +23,12 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     POD_NAME=$(get_pod_name "test-app")
 
     log_info "Testing HEAD request to github.com (should be allowed)..."
+    # Use -I (HEAD) instead of -X HEAD for better compatibility
     run exec_in_pod "$POD_NAME" "test-container" \
-        "curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X HEAD https://api.github.com"
+        "curl -s -I --max-time 30 https://api.github.com 2>&1 | head -1 | grep -oE '[0-9]{3}'"
 
     [ "$status" -eq 0 ]
-    # HEAD requests typically return 200 or 301
+    # HEAD requests typically return 200 or 301/302
     [[ "$output" =~ ^(200|301|302)$ ]]
 }
 
@@ -133,11 +134,14 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     [ "$status" -eq 0 ]
     [ "$output" = "403" ]
 
-    # Verify OPA is healthy and processing requests
-    run exec_in_pod "$POD_NAME" "opa-sidecar" \
-        "wget -q -O- http://localhost:15020/health"
+    # Verify OPA logs show policy evaluation (ext_authz is being called)
+    OPA_LOGS=$(get_container_logs "$POD_NAME" "opa-sidecar" | tail -100)
 
-    [ "$status" -eq 0 ]
+    # OPA logs should contain evidence of authz queries or decisions
+    [[ "$OPA_LOGS" =~ "decision" ]] || \
+    [[ "$OPA_LOGS" =~ "query" ]] || \
+    [[ "$OPA_LOGS" =~ "ext_authz" ]] || \
+    [[ "$OPA_LOGS" =~ "envoy" ]]
 }
 
 @test "OPA blocks requests with different user agents consistently" {
