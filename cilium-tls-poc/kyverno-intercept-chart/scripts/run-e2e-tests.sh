@@ -110,18 +110,23 @@ create_kind_cluster() {
 
     log_info "Creating kind cluster: $KIND_CLUSTER_NAME"
 
+    # Set isolated KUBECONFIG before creating cluster to prevent modifying ~/.kube/config
+    # When KUBECONFIG env var is set, kind writes to that file instead of ~/.kube/config
+    export KUBECONFIG="/tmp/kind-${KIND_CLUSTER_NAME}-kubeconfig.yaml"
+
     # Use K8s version matching CI workflow
     kind create cluster --name "$KIND_CLUSTER_NAME" --image kindest/node:v1.31.9 --wait 120s
 
     log_info "Cluster created successfully"
+    log_info "Using isolated KUBECONFIG: $KUBECONFIG (user's ~/.kube/config not modified)"
 
-    # Set KUBECONFIG to use kind cluster (avoid interfering with user's main config)
-    setup_kubeconfig
+    # Verify cluster access
+    kubectl cluster-info
 }
 
-# Setup kubeconfig to use kind cluster
+# Setup kubeconfig to use kind cluster (for existing cluster case)
 setup_kubeconfig() {
-    log_info "Setting up kubeconfig for kind cluster..."
+    log_info "Setting up kubeconfig for existing kind cluster..."
 
     # Export kind kubeconfig to temp file to avoid modifying user's ~/.kube/config
     export KUBECONFIG="/tmp/kind-${KIND_CLUSTER_NAME}-kubeconfig.yaml"
