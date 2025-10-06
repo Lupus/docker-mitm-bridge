@@ -218,19 +218,19 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     log_info "Uninstalling release: $TEMP_RELEASE"
     helm uninstall "$TEMP_RELEASE" -n "$TEMP_NS" --wait --timeout 120s
 
-    # Wait a moment for cleanup job to complete
-    sleep 3
-
-    # Verify ClusterPolicy is removed
-    run kubectl get clusterpolicy "${TEMP_RELEASE}-inject-proxy"
-    [ "$status" -ne 0 ]
+    # Wait for ClusterPolicy to be deleted by cleanup job
+    kubectl wait --for=delete clusterpolicy/"${TEMP_RELEASE}-inject-proxy" --timeout=30s
     log_info "ClusterPolicy ${TEMP_RELEASE}-inject-proxy successfully removed"
 
     # Clean up namespace
     kubectl delete namespace "$TEMP_NS" --ignore-not-found=true
 }
 
-@test "Chart uninstall succeeds even if cleanup job fails" {
+@test "Chart uninstall succeeds gracefully when cleanup job cannot find target ClusterPolicy" {
+    # This test verifies that helm uninstall completes successfully even when the
+    # pre-delete cleanup job doesn't find the expected ClusterPolicy to delete.
+    # This ensures graceful degradation and prevents uninstall from hanging.
+
     # Create a temporary namespace
     TEMP_NS="test-cleanup-fail-ns-$RANDOM"
     TEMP_RELEASE="test-cleanup-fail"
@@ -244,8 +244,8 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     # Install with cleanup disabled initially
     helm install "$TEMP_RELEASE" . -n "$TEMP_NS" --set cleanup.enabled=false --wait --timeout 120s
 
-    # Manually create a ClusterPolicy that won't match (different name)
-    # This simulates a scenario where cleanup might fail
+    # Manually create a ClusterPolicy with a different name than what cleanup job expects
+    # This simulates a scenario where the cleanup job cannot find its target
     kubectl create -f - <<EOF
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
@@ -255,14 +255,15 @@ spec:
   rules: []
 EOF
 
-    # Upgrade to enable cleanup, but the cleanup job will look for the wrong policy name
+    # Upgrade to enable cleanup, but the cleanup job will look for "${TEMP_RELEASE}-inject-proxy"
+    # which doesn't exist (only the orphan policy exists)
     helm upgrade "$TEMP_RELEASE" . -n "$TEMP_NS" --set cleanup.enabled=true --wait --timeout 120s
 
-    # Uninstall should succeed even though cleanup job doesn't find its target
-    log_info "Uninstalling release: $TEMP_RELEASE (cleanup may not find policy)"
+    # Uninstall should succeed even though cleanup job doesn't find its target ClusterPolicy
+    log_info "Uninstalling release: $TEMP_RELEASE (cleanup job won't find expected policy)"
     run helm uninstall "$TEMP_RELEASE" -n "$TEMP_NS" --wait --timeout 120s
     [ "$status" -eq 0 ]
-    log_info "Uninstall succeeded gracefully"
+    log_info "Uninstall succeeded gracefully despite missing target policy"
 
     # Clean up the orphan policy and namespace
     kubectl delete clusterpolicy "${TEMP_RELEASE}-test-orphan-policy" --ignore-not-found=true
