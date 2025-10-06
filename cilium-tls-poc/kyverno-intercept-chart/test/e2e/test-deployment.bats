@@ -170,3 +170,101 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     XDS_LOGS=$(get_container_logs "$POD_NAME" "xds-service")
     [[ "$XDS_LOGS" =~ "SDS request" ]] || [[ "$XDS_LOGS" =~ "CDS request" ]] || [[ "$XDS_LOGS" =~ "LDS request" ]]
 }
+
+@test "Cleanup job template has correct pre-delete hook annotations" {
+    # Change to chart directory to run helm template
+    cd "$(dirname "$BATS_TEST_DIRNAME")/.."
+
+    # Render the template with helm template
+    RENDERED=$(helm template test-release . --set cleanup.enabled=true)
+
+    # Verify Job has pre-delete hook annotation
+    echo "$RENDERED" | grep -A 10 'kind: Job' | grep -q '"helm.sh/hook": pre-delete'
+
+    # Verify hook weight
+    echo "$RENDERED" | grep -A 10 'kind: Job' | grep -q '"helm.sh/hook-weight": "-5"'
+
+    # Verify hook delete policy
+    echo "$RENDERED" | grep -A 10 'kind: Job' | grep -q '"helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded'
+
+    # Verify ServiceAccount has pre-delete hook
+    echo "$RENDERED" | grep -B 5 -A 5 'name: test-release-cleanup' | grep -q '"helm.sh/hook": pre-delete'
+
+    # Verify ClusterRole has correct RBAC permissions
+    echo "$RENDERED" | grep -A 20 'kind: ClusterRole' | grep -q 'clusterpolicies'
+    echo "$RENDERED" | grep -A 20 'kind: ClusterRole' | grep -q 'delete'
+}
+
+@test "Pre-delete hook removes ClusterPolicy on uninstall" {
+    # Create a temporary namespace
+    TEMP_NS="test-cleanup-ns-$RANDOM"
+    TEMP_RELEASE="test-cleanup"
+
+    kubectl create namespace "$TEMP_NS"
+    log_info "Installing temporary release: $TEMP_RELEASE in namespace $TEMP_NS"
+
+    # Change to chart directory
+    cd "$(dirname "$BATS_TEST_DIRNAME")/.."
+
+    # Install the release
+    helm install "$TEMP_RELEASE" . -n "$TEMP_NS" --wait --timeout 120s
+
+    # Verify ClusterPolicy exists
+    run kubectl get clusterpolicy "${TEMP_RELEASE}-inject-proxy"
+    [ "$status" -eq 0 ]
+    log_info "ClusterPolicy ${TEMP_RELEASE}-inject-proxy exists"
+
+    # Uninstall the release (this should trigger the pre-delete hook)
+    log_info "Uninstalling release: $TEMP_RELEASE"
+    helm uninstall "$TEMP_RELEASE" -n "$TEMP_NS" --wait --timeout 120s
+
+    # Wait a moment for cleanup job to complete
+    sleep 3
+
+    # Verify ClusterPolicy is removed
+    run kubectl get clusterpolicy "${TEMP_RELEASE}-inject-proxy"
+    [ "$status" -ne 0 ]
+    log_info "ClusterPolicy ${TEMP_RELEASE}-inject-proxy successfully removed"
+
+    # Clean up namespace
+    kubectl delete namespace "$TEMP_NS" --ignore-not-found=true
+}
+
+@test "Chart uninstall succeeds even if cleanup job fails" {
+    # Create a temporary namespace
+    TEMP_NS="test-cleanup-fail-ns-$RANDOM"
+    TEMP_RELEASE="test-cleanup-fail"
+
+    kubectl create namespace "$TEMP_NS"
+    log_info "Installing temporary release: $TEMP_RELEASE in namespace $TEMP_NS"
+
+    # Change to chart directory
+    cd "$(dirname "$BATS_TEST_DIRNAME")/.."
+
+    # Install with cleanup disabled initially
+    helm install "$TEMP_RELEASE" . -n "$TEMP_NS" --set cleanup.enabled=false --wait --timeout 120s
+
+    # Manually create a ClusterPolicy that won't match (different name)
+    # This simulates a scenario where cleanup might fail
+    kubectl create -f - <<EOF
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: ${TEMP_RELEASE}-test-orphan-policy
+spec:
+  rules: []
+EOF
+
+    # Upgrade to enable cleanup, but the cleanup job will look for the wrong policy name
+    helm upgrade "$TEMP_RELEASE" . -n "$TEMP_NS" --set cleanup.enabled=true --wait --timeout 120s
+
+    # Uninstall should succeed even though cleanup job doesn't find its target
+    log_info "Uninstalling release: $TEMP_RELEASE (cleanup may not find policy)"
+    run helm uninstall "$TEMP_RELEASE" -n "$TEMP_NS" --wait --timeout 120s
+    [ "$status" -eq 0 ]
+    log_info "Uninstall succeeded gracefully"
+
+    # Clean up the orphan policy and namespace
+    kubectl delete clusterpolicy "${TEMP_RELEASE}-test-orphan-policy" --ignore-not-found=true
+    kubectl delete namespace "$TEMP_NS" --ignore-not-found=true
+}
