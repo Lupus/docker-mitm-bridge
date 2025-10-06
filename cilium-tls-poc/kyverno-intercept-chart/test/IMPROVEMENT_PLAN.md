@@ -1,24 +1,24 @@
 # Kyverno Interceptor Chart - Test Improvement Plan
 
-**Status**: In Progress (Task 4 Complete ✅)
+**Status**: In Progress (Tasks 1 & 4 Complete ✅)
 **Created**: 2025-10-05
-**Last Updated**: 2025-10-05 (Task 4 completed)
+**Last Updated**: 2025-10-06 (Tasks 1 & 4 completed)
 **Priority**: High → Medium
 
 ## Overview
 
 This document outlines planned improvements to the E2E test suite to enhance reliability, reduce external dependencies, and improve test maintainability.
 
-## Current Test Suite Status (As of 2025-10-05)
+## Current Test Suite Status (As of 2025-10-06)
 
 **Test Coverage:**
-- ✅ **61 tests** across 5 test files
-- ✅ Test deployment and sidecar injection
-- ✅ TLS interception functionality (11 tests)
-- ✅ OPA policy enforcement (11 tests)
-- ✅ Network isolation (18 tests)
-- ✅ Port isolation (14 tests)
-- ❌ **Missing**: Cleanup job tests (Task 1)
+- ✅ **64 tests** across 5 test files
+- ✅ Test deployment and sidecar injection (13 tests)
+- ✅ Cleanup job (3 tests) ← **NEW**
+- ✅ TLS interception functionality (10 tests)
+- ✅ OPA policy enforcement (12 tests)
+- ✅ Network isolation (13 tests)
+- ✅ Port isolation (16 tests)
 
 **Technical Debt:**
 - **6 sleep commands** requiring replacement (test-tls, test-opa-policy, test-network-isolation, test-port-isolation, test-pod.yaml, helpers.bash)
@@ -35,18 +35,18 @@ This document outlines planned improvements to the E2E test suite to enhance rel
 
 ## Progress Tracker
 
-**Overall Status**: 1 of 4 tasks complete (25%)
+**Overall Status**: 2 of 4 tasks complete (50%)
 
 | Task | Status | Time Estimated | Time Actual | Notes |
 |------|--------|---------------|-------------|-------|
 | Task 4 | ✅ Complete | 3.5h | 1h | Dependencies updated + script simplified |
-| Task 1 | 🔲 Pending | 3h | - | Cleanup job tests |
+| Task 1 | ✅ Complete | 3h | 1.5h | Cleanup job tests + .helmignore |
 | Task 3 | 🔲 Pending | 7h | - | Replace sleep commands |
 | Task 2 | 🔲 Pending | 14h | - | Mock external dependencies |
 
-**Time Saved**: 2.5 hours (Task 4 faster than estimated)
-**Completed**: 2025-10-05
-**PR**: [#2](https://github.com/Lupus/docker-mitm-bridge/pull/2)
+**Time Saved**: 4 hours (Task 4: 2.5h, Task 1: 1.5h)
+**Task 4 Completed**: 2025-10-05 | **PR**: [#2](https://github.com/Lupus/docker-mitm-bridge/pull/2)
+**Task 1 Completed**: 2025-10-06 | **PR**: [#3](https://github.com/Lupus/docker-mitm-bridge/pull/3)
 
 ---
 
@@ -97,15 +97,43 @@ This document outlines planned improvements to the E2E test suite to enhance rel
 ```
 
 ### Acceptance Criteria
-- [ ] Cleanup job annotations verified
-- [ ] ClusterPolicy removal confirmed after uninstall
-- [ ] Test passes in CI/CD pipeline
-- [ ] Documentation updated
+- [x] Cleanup job annotations verified
+- [x] ClusterPolicy removal confirmed after uninstall
+- [x] Test passes in CI/CD pipeline
+- [x] Documentation updated
 
 ### Estimated Time
 - Implementation: 2 hours
 - Testing & verification: 1 hour
 - **Total**: 3 hours
+- **Actual**: 1.5 hours
+
+### Implementation Summary
+
+**✅ Completed 2025-10-06**: All cleanup job tests implemented and passing
+
+**What Was Done:**
+
+1. **Created .helmignore file** (`cilium-tls-poc/kyverno-intercept-chart/.helmignore`):
+   - Fixed helm packaging issue with .venv directory
+   - Excluded test files and other non-chart files
+
+2. **Added 3 new tests** to `test/e2e/test-deployment.bats`:
+   - Test 11: Cleanup job template has correct pre-delete hook annotations
+   - Test 12: Pre-delete hook removes ClusterPolicy on uninstall
+   - Test 13: Chart uninstall succeeds even if cleanup job fails
+
+3. **Test Results**:
+   - All 64 tests passing (was 61 tests)
+   - Tests verified with full E2E suite run
+   - CI/CD compatibility confirmed
+
+**Files Modified:**
+- `test/e2e/test-deployment.bats` (3 new tests added)
+- `.helmignore` (new file created)
+- `test/IMPROVEMENT_PLAN.md` (this file)
+
+**PR**: [#3](https://github.com/Lupus/docker-mitm-bridge/pull/3)
 
 ---
 
@@ -534,12 +562,12 @@ kubectl version  # Verify v1.31.0
 
 ---
 
-## Execution Plan (Revised 2025-10-05)
+## Execution Plan (Revised 2025-10-06)
 
-### Phase 1: Quick Wins (Week 1)
+### Phase 1: Quick Wins (Week 1) ✅ **COMPLETE**
 1. ✅ **Task 4** - Update GitHub workflow dependencies ~~(3.5h)~~ **(1h actual)** - **COMPLETE**
-2. **Task 1** - Add cleanup job tests (3h) - **PENDING**
-   - **Total**: ~~6.5 hours~~ 4 hours (2.5h saved on Task 4)
+2. ✅ **Task 1** - Add cleanup job tests ~~(3h)~~ **(1.5h actual)** - **COMPLETE**
+   - **Total**: ~~6.5 hours~~ **2.5 hours actual** (4 hours saved)
 
 ### Phase 2: Foundation (Week 2)
 3. **Task 3** - Replace sleep commands ~~(10h)~~ **(7h revised)**
@@ -553,35 +581,44 @@ kubectl version  # Verify v1.31.0
    - Migrate tests (66 external domain references)
    - **Total**: 14 hours
 
-### Total Effort (Revised)
-- ~~**30.5 hours**~~ ~~**27.5 hours**~~ **25 hours** (~3 days of focused work)
+### Total Effort (Revised 2025-10-06)
+- ~~**30.5 hours**~~ ~~**27.5 hours**~~ ~~**25 hours**~~ **21 hours** (~2.5 days of focused work)
 
 **Changes:**
 - Task 3 reduced from 10h to 7h (existing wait_for_pod_ready helper)
 - Task 4 completed in 1h instead of 3.5h (2.5h saved)
-- Total effort reduced by 5.5 hours
+- Task 1 completed in 1.5h instead of 3h (1.5h saved)
+- Total effort reduced by 9.5 hours from original estimate
 
 **Progress:**
-- ✅ **Task 4**: 1 hour (complete)
-- ⏳ **Remaining**: 24 hours
+- ✅ **Phase 1 Complete**: 2.5 hours (Task 4: 1h, Task 1: 1.5h)
+- ⏳ **Remaining**: 21 hours (Task 3: 7h, Task 2: 14h)
 
 ---
 
 ## Success Metrics
 
-**Before**:
+**Before (2025-10-05)**:
 - 61 tests, ~5-8 min runtime
 - External dependencies: 4+ (github.com, anthropic.com, etc.)
 - Fixed sleeps: 5+ locations
 - Cleanup job: 0% tested
 - Flakiness: Moderate (external deps)
 
-**After**:
-- 65+ tests (added cleanup tests)
+**Current (2025-10-06)**:
+- ✅ 64 tests (+3 cleanup tests)
+- ✅ Cleanup job: 100% tested
+- Runtime: ~5-8 min (unchanged, waiting for Task 3)
+- External dependencies: 4+ (waiting for Task 2)
+- Fixed sleeps: 5+ locations (waiting for Task 3)
+- Flakiness: Moderate (waiting for Tasks 2 & 3)
+
+**Target (After All Tasks)**:
+- 65+ tests
 - Runtime: ~3-5 min (faster waits, local mocks)
 - External dependencies: 1 (optional smoke test)
 - Fixed sleeps: 0
-- Cleanup job: 100% tested
+- Cleanup job: 100% tested ✅
 - Flakiness: Low
 
 ---
