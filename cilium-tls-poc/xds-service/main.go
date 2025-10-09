@@ -688,9 +688,9 @@ func (s *LDSServer) buildListener() error {
 		return fmt.Errorf("failed to marshal http connection manager: %w", err)
 	}
 
-	// SECURITY: Create TLS context for default chain to handle HTTPS to non-whitelisted domains
+	// SECURITY: Create TLS context for TLS fallback chain to handle HTTPS to non-whitelisted domains
 	// This allows proper 403 responses instead of SSL errors
-	log.Println("Adding TLS termination to default filter chain for non-whitelisted domains...")
+	log.Println("Adding TLS fallback filter chain for non-whitelisted HTTPS domains...")
 	defaultTLS := &tlsv3.DownstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{
 			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
@@ -724,9 +724,13 @@ func (s *LDSServer) buildListener() error {
 		return fmt.Errorf("failed to marshal default TLS context: %w", err)
 	}
 
-	// Default filter chain (no match criteria - matches everything that didn't match SNI-specific chains)
-	// Now includes TLS termination to handle HTTPS to non-whitelisted domains
-	defaultFilterChain := &listener.FilterChain{
+	// TLS fallback filter chain: matches TLS traffic without SNI or with non-whitelisted SNI
+	// This handles HTTPS to non-whitelisted domains with proper 403 response
+	tlsFallbackFilterChain := &listener.FilterChain{
+		FilterChainMatch: &listener.FilterChainMatch{
+			TransportProtocol: "tls",
+			// No ServerNames match - catches all TLS that didn't match SNI-specific chains
+		},
 		Filters: []*listener.Filter{
 			{
 				Name: wellknown.HTTPConnectionManager,
@@ -743,7 +747,29 @@ func (s *LDSServer) buildListener() error {
 		},
 	}
 
-	filterChains = append(filterChains, defaultFilterChain)
+	filterChains = append(filterChains, tlsFallbackFilterChain)
+
+	// Plain HTTP fallback filter chain (no match criteria at all)
+	// Handles plain HTTP traffic (port 80) without TLS
+	plainHTTPManagerAny, err := anypb.New(httpManager)
+	if err != nil {
+		return fmt.Errorf("failed to marshal plain HTTP connection manager: %w", err)
+	}
+
+	plainHTTPFilterChain := &listener.FilterChain{
+		// No FilterChainMatch - this is the ultimate fallback for non-TLS traffic
+		Filters: []*listener.Filter{
+			{
+				Name: wellknown.HTTPConnectionManager,
+				ConfigType: &listener.Filter_TypedConfig{
+					TypedConfig: plainHTTPManagerAny,
+				},
+			},
+		},
+		// No TransportSocket - plain TCP/HTTP
+	}
+
+	filterChains = append(filterChains, plainHTTPFilterChain)
 
 	// Create TLS inspector listener filter to extract SNI
 	tlsInspectorConfig := &tls_inspector.TlsInspector{}
