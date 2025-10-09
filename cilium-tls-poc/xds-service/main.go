@@ -272,10 +272,17 @@ func (s *SDSServer) StreamSecrets(stream secret.SecretDiscoveryService_StreamSec
 		for _, resourceName := range req.ResourceNames {
 			log.Printf("Requested resource: %s", resourceName)
 
+			// Handle special _default_ certificate for non-whitelisted domains
+			domain := resourceName
+			if resourceName == "_default_" {
+				domain = "*.default.local"
+				log.Printf("Generating wildcard certificate for default filter chain: %s", domain)
+			}
+
 			// Generate certificate for the requested domain
-			pair, err := s.ca.GenerateCertificate(resourceName)
+			pair, err := s.ca.GenerateCertificate(domain)
 			if err != nil {
-				log.Printf("Failed to generate certificate for %s: %v", resourceName, err)
+				log.Printf("Failed to generate certificate for %s: %v", domain, err)
 				continue
 			}
 
@@ -340,10 +347,17 @@ func (s *SDSServer) FetchSecrets(ctx context.Context, req *discovery.DiscoveryRe
 	for _, resourceName := range req.ResourceNames {
 		log.Printf("Fetching resource: %s", resourceName)
 
+		// Handle special _default_ certificate for non-whitelisted domains
+		domain := resourceName
+		if resourceName == "_default_" {
+			domain = "*.default.local"
+			log.Printf("Generating wildcard certificate for default filter chain: %s", domain)
+		}
+
 		// Generate certificate for the requested domain
-		pair, err := s.ca.GenerateCertificate(resourceName)
+		pair, err := s.ca.GenerateCertificate(domain)
 		if err != nil {
-			log.Printf("Failed to generate certificate for %s: %v", resourceName, err)
+			log.Printf("Failed to generate certificate for %s: %v", domain, err)
 			continue
 		}
 
@@ -576,8 +590,9 @@ func (s *LDSServer) buildListener() error {
 		filterChains = append(filterChains, filterChain)
 	}
 
-	// Add default filter chain for non-TLS traffic (HTTP on port 80)
-	log.Println("Adding default filter chain for HTTP traffic...")
+	// Add default filter chain for traffic that doesn't match any SNI-specific chain
+	// This handles both HTTP (port 80) and HTTPS to non-whitelisted domains
+	log.Println("Adding default filter chain with TLS termination and ext_authz enforcement...")
 
 	// Create ext_authz filter for default chain (SECURITY: enforce OPA policy on all traffic)
 	extAuthzConfigDefault := &ext_authz.ExtAuthz{
@@ -673,7 +688,44 @@ func (s *LDSServer) buildListener() error {
 		return fmt.Errorf("failed to marshal http connection manager: %w", err)
 	}
 
-	// Default filter chain (no match criteria - matches everything that didn't match TLS chains)
+	// SECURITY: Create TLS context for default chain to handle HTTPS to non-whitelisted domains
+	// This allows proper 403 responses instead of SSL errors
+	log.Println("Adding TLS termination to default filter chain for non-whitelisted domains...")
+	defaultTLS := &tlsv3.DownstreamTlsContext{
+		CommonTlsContext: &tlsv3.CommonTlsContext{
+			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
+				{
+					Name: "_default_",
+					SdsConfig: &core.ConfigSource{
+						ResourceApiVersion: core.ApiVersion_V3,
+						ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
+							ApiConfigSource: &core.ApiConfigSource{
+								ApiType:             core.ApiConfigSource_GRPC,
+								TransportApiVersion: core.ApiVersion_V3,
+								GrpcServices: []*core.GrpcService{
+									{
+										TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+											EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+												ClusterName: "xds_cluster",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	defaultTLSAny, err := anypb.New(defaultTLS)
+	if err != nil {
+		return fmt.Errorf("failed to marshal default TLS context: %w", err)
+	}
+
+	// Default filter chain (no match criteria - matches everything that didn't match SNI-specific chains)
+	// Now includes TLS termination to handle HTTPS to non-whitelisted domains
 	defaultFilterChain := &listener.FilterChain{
 		Filters: []*listener.Filter{
 			{
@@ -681,6 +733,12 @@ func (s *LDSServer) buildListener() error {
 				ConfigType: &listener.Filter_TypedConfig{
 					TypedConfig: httpManagerAny,
 				},
+			},
+		},
+		TransportSocket: &core.TransportSocket{
+			Name: "envoy.transport_sockets.tls",
+			ConfigType: &core.TransportSocket_TypedConfig{
+				TypedConfig: defaultTLSAny,
 			},
 		},
 	}
