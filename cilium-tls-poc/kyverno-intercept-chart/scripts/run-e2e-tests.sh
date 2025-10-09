@@ -212,6 +212,7 @@ run_tests() {
 
     local test_files=(
         "test/e2e/test-deployment.bats"
+        "test/e2e/test-configmap-cloning.bats"
         "test/e2e/test-tls.bats"
         "test/e2e/test-opa-policy.bats"
         "test/e2e/test-port-isolation.bats"

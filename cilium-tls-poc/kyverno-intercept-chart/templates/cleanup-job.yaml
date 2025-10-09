@@ -24,6 +24,7 @@ spec:
         - |
           echo "Cleaning up cluster-scoped resources..."
           kubectl delete clusterpolicy {{ .Release.Name }}-inject-proxy --ignore-not-found=true
+          kubectl delete clusterpolicy {{ .Release.Name }}-clone-configmaps --ignore-not-found=true
           echo "Cleanup completed"
 ---
 apiVersion: v1

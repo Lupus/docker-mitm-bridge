@@ -193,9 +193,13 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     # Verify ClusterRole has correct RBAC permissions
     echo "$RENDERED" | grep -A 20 'kind: ClusterRole' | grep -q 'clusterpolicies'
     echo "$RENDERED" | grep -A 20 'kind: ClusterRole' | grep -q 'delete'
+
+    # Verify cleanup job deletes both ClusterPolicies (using test-release name from helm template)
+    echo "$RENDERED" | grep -A 30 'kind: Job' | grep -q 'test-release-inject-proxy'
+    echo "$RENDERED" | grep -A 30 'kind: Job' | grep -q 'test-release-clone-configmaps'
 }
 
-@test "Pre-delete hook removes ClusterPolicy on uninstall" {
+@test "Pre-delete hook removes ClusterPolicies on uninstall" {
     # Create a temporary namespace
     TEMP_NS="test-cleanup-ns-$RANDOM"
     TEMP_RELEASE="test-cleanup"
@@ -209,18 +213,25 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     # Install the release
     helm install "$TEMP_RELEASE" . -n "$TEMP_NS" --wait --timeout 120s
 
-    # Verify ClusterPolicy exists
+    # Verify both ClusterPolicies exist
     run kubectl get clusterpolicy "${TEMP_RELEASE}-inject-proxy"
     [ "$status" -eq 0 ]
     log_info "ClusterPolicy ${TEMP_RELEASE}-inject-proxy exists"
+
+    run kubectl get clusterpolicy "${TEMP_RELEASE}-clone-configmaps"
+    [ "$status" -eq 0 ]
+    log_info "ClusterPolicy ${TEMP_RELEASE}-clone-configmaps exists"
 
     # Uninstall the release (this should trigger the pre-delete hook)
     log_info "Uninstalling release: $TEMP_RELEASE"
     helm uninstall "$TEMP_RELEASE" -n "$TEMP_NS" --wait --timeout 120s
 
-    # Wait for ClusterPolicy to be deleted by cleanup job
+    # Wait for both ClusterPolicies to be deleted by cleanup job
     kubectl wait --for=delete clusterpolicy/"${TEMP_RELEASE}-inject-proxy" --timeout=30s
     log_info "ClusterPolicy ${TEMP_RELEASE}-inject-proxy successfully removed"
+
+    kubectl wait --for=delete clusterpolicy/"${TEMP_RELEASE}-clone-configmaps" --timeout=30s
+    log_info "ClusterPolicy ${TEMP_RELEASE}-clone-configmaps successfully removed"
 
     # Clean up namespace
     kubectl delete namespace "$TEMP_NS" --ignore-not-found=true
