@@ -579,6 +579,25 @@ func (s *LDSServer) buildListener() error {
 	// Add default filter chain for non-TLS traffic (HTTP on port 80)
 	log.Println("Adding default filter chain for HTTP traffic...")
 
+	// Create ext_authz filter for default chain (SECURITY: enforce OPA policy on all traffic)
+	extAuthzConfigDefault := &ext_authz.ExtAuthz{
+		Services: &ext_authz.ExtAuthz_GrpcService{
+			GrpcService: &core.GrpcService{
+				TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+					EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+						ClusterName: "ext_authz_cluster",
+					},
+				},
+				Timeout: durationpb.New(10 * time.Second),
+			},
+		},
+		TransportApiVersion: core.ApiVersion_V3,
+	}
+	extAuthzAnyDefault, err := anypb.New(extAuthzConfigDefault)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ext_authz config for default chain: %w", err)
+	}
+
 	// Create HTTP Connection Manager for plain HTTP
 	httpManager := &hcm.HttpConnectionManager{
 		CodecType:  hcm.HttpConnectionManager_AUTO,
@@ -611,6 +630,13 @@ func (s *LDSServer) buildListener() error {
 			},
 		},
 		HttpFilters: []*hcm.HttpFilter{
+			// SECURITY FIX: Add ext_authz as first filter to enforce OPA policy
+			{
+				Name: "envoy.filters.http.ext_authz",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: extAuthzAnyDefault,
+				},
+			},
 			{
 				Name: "envoy.filters.http.dynamic_forward_proxy",
 				ConfigType: &hcm.HttpFilter_TypedConfig{
