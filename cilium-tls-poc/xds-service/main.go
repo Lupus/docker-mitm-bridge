@@ -726,10 +726,13 @@ func (s *LDSServer) buildListener() error {
 
 	// TLS fallback filter chain: matches TLS traffic without SNI or with non-whitelisted SNI
 	// This handles HTTPS to non-whitelisted domains with proper 403 response
+	// Note: Having TransportSocket with TLS but no ServerNames in FilterChainMatch creates
+	// a fallback that catches any TLS traffic that doesn't match SNI-specific chains
 	tlsFallbackFilterChain := &listener.FilterChain{
 		FilterChainMatch: &listener.FilterChainMatch{
-			TransportProtocol: "tls",
-			// No ServerNames match - catches all TLS that didn't match SNI-specific chains
+			// Match any TLS traffic by having TransportSocket defined but no ServerNames
+			// The tls_inspector will detect TLS, and if SNI doesn't match any specific chain,
+			// it will use this fallback
 		},
 		Filters: []*listener.Filter{
 			{
