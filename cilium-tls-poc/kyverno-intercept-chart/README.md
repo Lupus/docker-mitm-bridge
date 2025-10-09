@@ -270,14 +270,23 @@ kubectl exec -n kyverno-intercept deploy/test-app -c test -- id
 - xDS pre-generates TLS certificates for all required domains
 - Certificates cached in memory for Envoy to request
 
-### 2. Sidecar Injection
+### 2. ConfigMap Cloning
+When a pod with label `intercept-proxy/enabled: true` is created in any namespace:
+- **Automatic Cloning**: Kyverno automatically clones required ConfigMaps from the chart namespace to the pod's namespace
+- **Synchronized Updates**: ConfigMaps stay synchronized - updates to source ConfigMaps are propagated automatically
+- **ConfigMaps Cloned**:
+  - `{release-name}-envoy-config`: Envoy proxy configuration
+  - `{release-name}-opa-policy`: OPA policy rules and data
+  - `{release-name}-opa-config`: OPA runtime configuration
+
+### 3. Sidecar Injection
 When a pod with label `intercept-proxy/enabled: true` is created:
 - **Init Container**: Sets up iptables rules for traffic redirection and port isolation, installs CA
 - **Envoy Sidecar**: Minimal bootstrap, connects to xDS service for full dynamic xDS configuration
 - **OPA Sidecar**: Provides policy evaluation and domain list aggregation
 - **xDS Service**: Acts as full xDS control plane (CDS+LDS+SDS) serving all dynamic configuration
 
-### 3. Dynamic Configuration Flow
+### 4. Dynamic Configuration Flow
 
 ```
 1. Envoy starts with minimal bootstrap → connects to xDS service (port 15090)
@@ -293,7 +302,7 @@ When a pod with label `intercept-proxy/enabled: true` is created:
 6. Envoy activates with fully dynamic configuration (no static clusters/listeners)
 ```
 
-### 4. Traffic Flow
+### 5. Traffic Flow
 1. Application makes HTTPS request (e.g., to api.github.com)
 2. iptables NAT redirects to Envoy (port 15001) - no proxy env vars needed
 3. Envoy receives connection, extracts SNI via tls_inspector listener filter
@@ -304,7 +313,7 @@ When a pod with label `intercept-proxy/enabled: true` is created:
 8. If allowed, Envoy uses dynamic_forward_proxy to resolve and connect to upstream
 9. Envoy re-encrypts with real server certificate and forwards request
 
-### 4. iptables Rules
+### 6. iptables Rules
 
 The init container sets up two sets of rules:
 
@@ -388,6 +397,21 @@ opa:
 
 ## Troubleshooting
 
+### Check ConfigMap Cloning
+
+```bash
+# Verify the ConfigMap clone policy is active
+kubectl get cpol {{ .Release.Name }}-clone-configmaps
+
+# Check if ConfigMaps were cloned to the target namespace
+kubectl get configmap -n <target-namespace> | grep {{ .Release.Name }}
+# Should show: {release-name}-envoy-config, {release-name}-opa-policy, {release-name}-opa-config
+
+# Verify ConfigMap content matches source
+kubectl get configmap {{ .Release.Name }}-envoy-config -n kyverno-intercept -o yaml
+kubectl get configmap {{ .Release.Name }}-envoy-config -n <target-namespace> -o yaml
+```
+
 ### Check Sidecar Injection
 
 ```bash
@@ -469,17 +493,23 @@ kubectl get pod <pod-name> -n kyverno-intercept -o jsonpath='{.spec.containers[?
 
 ### Common Issues
 
-1. **Sidecars not injected**
+1. **ConfigMaps not found in target namespace**
+   - Verify the clone policy is active: `kubectl get cpol {release-name}-clone-configmaps`
+   - Check Kyverno logs for cloning errors: `kubectl logs -n kyverno -l app.kubernetes.io/name=kyverno`
+   - Ensure source ConfigMaps exist in chart namespace: `kubectl get cm -n kyverno-intercept`
+   - Delete and recreate the pod to trigger ConfigMap cloning again
+
+2. **Sidecars not injected**
    - Verify Kyverno is installed and running
    - Check pod has correct label: `intercept-proxy/enabled: "true"`
    - Review Kyverno policy events: `kubectl describe cpol intercept-proxy-inject-proxy`
 
-2. **TLS errors**
+3. **TLS errors**
    - Ensure CA certificate is properly installed in container
    - Check certificate generation job completed: `kubectl logs job/intercept-proxy-cert-generator -n kyverno-intercept`
    - Verify certificate for domain exists: `kubectl get secrets -n kyverno-intercept | grep cert-`
 
-3. **Traffic not intercepted**
+4. **Traffic not intercepted**
    - **Most common cause**: Application container running as UID 101, 102, or 103
      - Check: `kubectl exec <pod> -c <container> -- id`
      - Fix: Set `securityContext.runAsUser` to different UID (e.g., 12345)
@@ -487,12 +517,12 @@ kubectl get pod <pod-name> -n kyverno-intercept -o jsonpath='{.spec.containers[?
    - Check Envoy is listening on port 15001
    - Verify xDS service logs show certificates were generated
 
-4. **OPA container restarting**
+5. **OPA container restarting**
    - Check liveness probe configuration matches OPA port (15020)
    - Verify OPA UID (102) is included in FILTER table allow rules
    - Review OPA logs for startup errors
 
-5. **Infinite forwarding loops**
+6. **Infinite forwarding loops**
    - Verify Envoy and OPA UIDs are excluded in NAT table
    - Check init container set up UID-based exclusion correctly
    - Ensure iptables rules use `--uid-owner` for sidecar exclusion
@@ -503,6 +533,7 @@ This chart follows security and operational best practices:
 
 - **No namespace creation in templates** - Uses `helm install --create-namespace` instead
 - **Cluster resource cleanup** - Pre-delete hooks clean up ClusterPolicy
+- **Cross-namespace ConfigMap cloning** - Kyverno automatically clones configuration to target namespaces with synchronization
 - **Transparent interception** - No proxy environment variables needed
 - **gRPC communication** - Envoy and OPA communicate via efficient gRPC
 - **Automatic CA trust** - CA certificates automatically distributed to all containers

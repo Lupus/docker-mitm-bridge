@@ -7,6 +7,7 @@ Comprehensive end-to-end test suite for the Kyverno TLS Interceptor Helm Chart u
 This test suite validates all security and functional features of the interceptor chart:
 
 - ✅ Chart deployment and sidecar injection
+- ✅ ConfigMap cloning across namespaces
 - ✅ TLS interception with internal CA
 - ✅ OPA policy enforcement (allow/deny rules)
 - ✅ Port isolation (sidecar ports blocked)
@@ -64,6 +65,7 @@ helm install intercept-proxy . -n kyverno-intercept --create-namespace --wait
 
 # 4. Run tests
 bats test/e2e/test-deployment.bats
+bats test/e2e/test-configmap-cloning.bats
 bats test/e2e/test-tls.bats
 bats test/e2e/test-opa-policy.bats
 bats test/e2e/test-port-isolation.bats
@@ -74,21 +76,22 @@ bats test/e2e/test-network-isolation.bats
 
 ```
 test/
-├── e2e/                           # BATS test files
-│   ├── test-deployment.bats      # Sidecar injection & deployment
-│   ├── test-tls.bats             # TLS interception
-│   ├── test-opa-policy.bats     # OPA policy enforcement
-│   ├── test-port-isolation.bats # Port blocking rules
+├── e2e/                              # BATS test files
+│   ├── test-deployment.bats         # Sidecar injection & deployment
+│   ├── test-configmap-cloning.bats # Cross-namespace ConfigMap cloning
+│   ├── test-tls.bats                # TLS interception
+│   ├── test-opa-policy.bats        # OPA policy enforcement
+│   ├── test-port-isolation.bats    # Port blocking rules
 │   └── test-network-isolation.bats # Network restrictions
-├── fixtures/                      # Test pod manifests
-│   ├── test-pod.yaml             # Pod with interception enabled
-│   ├── external-pod.yaml         # Pod without interception
-│   └── http-server.yaml          # Simple HTTP server
-└── lib/                           # Testing libraries
-    ├── detik.bash                # DETIK Kubernetes testing library
-    ├── utils.bash                # DETIK utilities
-    ├── linter.bash               # DETIK linter
-    └── helpers.bash              # Custom helper functions
+├── fixtures/                         # Test pod manifests
+│   ├── test-pod.yaml                # Pod with interception enabled
+│   ├── external-pod.yaml            # Pod without interception
+│   └── http-server.yaml             # Simple HTTP server
+└── lib/                              # Testing libraries
+    ├── detik.bash                   # DETIK Kubernetes testing library
+    ├── utils.bash                   # DETIK utilities
+    ├── linter.bash                  # DETIK linter
+    └── helpers.bash                 # Custom helper functions
 ```
 
 ## Test Coverage
@@ -102,6 +105,7 @@ test/
 - Init container completed successfully
 - CA certificate mounted
 - All sidecars healthy
+- Pre-delete cleanup hooks work
 
 **Sample test:**
 ```bats
@@ -112,7 +116,32 @@ test/
 }
 ```
 
-### 2. TLS Interception Tests (`test-tls.bats`)
+### 2. ConfigMap Cloning Tests (`test-configmap-cloning.bats`)
+
+**What it tests:**
+- ConfigMap clone ClusterPolicy exists
+- Source ConfigMaps exist in chart namespace
+- ConfigMaps are automatically cloned to different namespaces
+- Cloned ConfigMaps have correct content
+- Pods in different namespaces get sidecars injected
+- Sidecars can access cloned ConfigMaps
+- Cross-namespace pods can make HTTPS requests
+- ConfigMap updates are synchronized across namespaces
+
+**Sample test:**
+```bats
+@test "ConfigMaps are automatically cloned to target namespace" {
+    TEST_NS="cross-namespace-test"
+    # Deploy pod with intercept-proxy/enabled label in different namespace
+    # Verify all 3 ConfigMaps are cloned automatically
+    run kubectl get configmap -n "$TEST_NS" -o name
+    [[ "$output" =~ "intercept-proxy-envoy-config" ]]
+    [[ "$output" =~ "intercept-proxy-opa-policy" ]]
+    [[ "$output" =~ "intercept-proxy-opa-config" ]]
+}
+```
+
+### 3. TLS Interception Tests (`test-tls.bats`)
 
 **What it tests:**
 - HTTPS requests succeed
@@ -136,7 +165,7 @@ test/
 }
 ```
 
-### 3. OPA Policy Tests (`test-opa-policy.bats`)
+### 4. OPA Policy Tests (`test-opa-policy.bats`)
 
 **What it tests:**
 - GET/HEAD allowed to restricted domains (github.com)
@@ -157,7 +186,7 @@ test/
 }
 ```
 
-### 4. Port Isolation Tests (`test-port-isolation.bats`)
+### 5. Port Isolation Tests (`test-port-isolation.bats`)
 
 **What it tests:**
 - Envoy admin port (15000) blocked
@@ -181,7 +210,7 @@ test/
 }
 ```
 
-### 5. Network Isolation Tests (`test-network-isolation.bats`)
+### 6. Network Isolation Tests (`test-network-isolation.bats`)
 
 **What it tests:**
 - Pod-to-pod connectivity blocked
@@ -359,12 +388,13 @@ kubectl describe clusterpolicy intercept-proxy-inject-proxy
 Typical test run times:
 
 - **Deployment tests**: ~30-60 seconds
+- **ConfigMap cloning tests**: ~60-90 seconds
 - **TLS tests**: ~60-90 seconds
 - **OPA tests**: ~60-90 seconds
 - **Port isolation tests**: ~90-120 seconds
 - **Network isolation tests**: ~90-120 seconds
 
-**Total runtime**: ~5-8 minutes (including setup)
+**Total runtime**: ~6-10 minutes (including setup)
 
 ## Contributing
 

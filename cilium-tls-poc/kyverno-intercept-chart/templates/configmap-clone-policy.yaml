@@ -1,0 +1,78 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-clone-configmaps
+  annotations:
+    policies.kyverno.io/title: Clone Intercept ConfigMaps
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: ConfigMap
+    policies.kyverno.io/description: >-
+      Clones the Envoy and OPA configuration ConfigMaps from the chart namespace
+      to any namespace where a pod with the intercept-proxy label is created.
+      This ensures sidecars can access their configuration regardless of the
+      target namespace.
+spec:
+  background: true
+  rules:
+  # Clone Envoy ConfigMap when a pod with our label is created
+  - name: clone-envoy-config
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    generate:
+      apiVersion: v1
+      kind: ConfigMap
+      name: {{ .Release.Name }}-envoy-config
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      synchronize: true
+      clone:
+        namespace: {{ .Values.namespace }}
+        name: {{ .Release.Name }}-envoy-config
+
+  {{- if .Values.opa.enabled }}
+  # Clone OPA policy ConfigMap
+  - name: clone-opa-policy
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    generate:
+      apiVersion: v1
+      kind: ConfigMap
+      name: {{ .Release.Name }}-opa-policy
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      synchronize: true
+      clone:
+        namespace: {{ .Values.namespace }}
+        name: {{ .Release.Name }}-opa-policy
+
+  # Clone OPA config ConfigMap
+  - name: clone-opa-config
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    generate:
+      apiVersion: v1
+      kind: ConfigMap
+      name: {{ .Release.Name }}-opa-config
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      synchronize: true
+      clone:
+        namespace: {{ .Values.namespace }}
+        name: {{ .Release.Name }}-opa-config
+  {{- end }}
