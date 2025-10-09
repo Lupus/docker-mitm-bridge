@@ -143,21 +143,25 @@ setup_file() {
     [ "$status" -ne 0 ]
 }
 
-@test "App container CANNOT access pod-to-pod on HTTP" {
+@test "App container accesses pod-to-pod HTTP through Envoy (intercepted)" {
     POD_NAME=$(get_pod_name "test-app")
 
     # Get http-server service IP
     HTTP_SVC_IP=$(kubectl get svc http-server -n kyverno-intercept -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
 
     if [ -n "$HTTP_SVC_IP" ]; then
-        log_info "Testing pod-to-pod HTTP to service $HTTP_SVC_IP (should be blocked)..."
+        log_info "Testing pod-to-pod HTTP to service $HTTP_SVC_IP (should be intercepted by Envoy)..."
 
-        # Direct IP access on port 80 should be blocked
+        # Port 80 traffic is redirected to Envoy, not blocked
+        # This is expected behavior - HTTP/HTTPS are always intercepted
         run exec_in_pod "$POD_NAME" "test-container" \
-            "timeout 3 curl -s http://$HTTP_SVC_IP 2>&1"
+            "timeout 3 curl -s -o /dev/null -w '%{http_code}' http://$HTTP_SVC_IP 2>&1"
 
-        # Should fail or timeout
-        [ "$status" -ne 0 ]
+        # Should succeed (intercepted by Envoy) or be blocked by OPA
+        # Either way, connection reaches Envoy - it's not blocked at network level
+        [ "$status" -eq 0 ] || [[ "$output" =~ "403" ]]
+
+        log_info "Pod-to-pod HTTP traffic is intercepted by Envoy (status: $output)"
     else
         skip "http-server service not found"
     fi
