@@ -18,8 +18,9 @@ data:
 
     # Extract request details
     method := http_request.method
-    # Use host field directly, or fall back to :authority header
-    host := http_request.host
+    # SECURITY: Use TLS certificate CN (destination.principal) instead of HTTP Host header
+    # to prevent Host header manipulation bypasses
+    host := input.attributes.destination.principal
     path := http_request.path
 
     # Check if domain is in allowed list (restricted to GET/HEAD)
