@@ -26,14 +26,26 @@ data:
     http_host := http_request.host
 
     # Use TLS CN if available (HTTPS), otherwise use Host header (HTTP)
-    host := tls_principal if tls_principal != ""
-    host := http_host if tls_principal == ""
+    # Handle both undefined and empty string cases
+    host := tls_principal if {
+        tls_principal
+        tls_principal != ""
+    }
+
+    host := http_host if {
+        not tls_principal
+    }
+
+    host := http_host if {
+        tls_principal == ""
+    }
 
     # SECURITY CHECK: For HTTPS, reject if Host header doesn't match TLS certificate CN
     # This prevents Host header manipulation attacks on TLS connections
     host_header_mismatch if {
-        tls_principal != ""  # TLS connection
-        tls_principal != http_host  # Host header mismatch
+        tls_principal
+        tls_principal != ""
+        tls_principal != http_host
     }
 
     # Check if domain is in allowed list (restricted to GET/HEAD)
