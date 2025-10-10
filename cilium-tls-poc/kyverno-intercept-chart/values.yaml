@@ -52,7 +52,8 @@ envoy:
     requests:
       memory: "128Mi"
       cpu: "100m"
-  port: 15001      # Proxy port (sidecar infrastructure range)
+  port: 15001      # HTTP proxy port (sidecar infrastructure range)
+  httpsPort: 15002 # HTTPS proxy port (sidecar infrastructure range)
   adminPort: 15000 # Admin interface
   uid: 101         # Run as non-root user
   gid: 101
