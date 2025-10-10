@@ -75,7 +75,8 @@ spec:
               {{- if .Values.xds.enabled }}
               XDS_UID={{ .Values.xds.uid }}
               {{- end }}
-              ENVOY_PROXY_PORT={{ .Values.envoy.port }}
+              ENVOY_HTTP_PORT={{ .Values.envoy.port }}
+              ENVOY_HTTPS_PORT={{ .Values.envoy.httpsPort }}
 
               # ============================================
               # NAT table - Traffic redirection
@@ -90,10 +91,9 @@ spec:
               iptables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN
               {{- end }}
 
-              # Redirect HTTP/HTTPS traffic to Envoy
-              {{- range .Values.initContainer.redirectPorts }}
-              iptables -t nat -A PROXY_REDIRECT -p tcp --dport {{ . }} -j REDIRECT --to-port ${ENVOY_PROXY_PORT}
-              {{- end }}
+              # Redirect HTTP/HTTPS traffic to separate Envoy listeners
+              iptables -t nat -A PROXY_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port ${ENVOY_HTTP_PORT}
+              iptables -t nat -A PROXY_REDIRECT -p tcp --dport 443 -j REDIRECT --to-port ${ENVOY_HTTPS_PORT}
 
               # Apply redirection
               iptables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
@@ -116,8 +116,9 @@ spec:
               # 1. Block privileged ports (0-{{ .Values.initContainer.privilegedPortEnd }}) for safety
               iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset
 
-              # 2. Allow redirected traffic to Envoy proxy port (needed after NAT redirect)
+              # 2. Allow redirected traffic to Envoy proxy ports (needed after NAT redirect)
               iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT
+              iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport {{ .Values.envoy.httpsPort }} -j ACCEPT
 
               # 3. Block other sidecar infrastructure ports ({{ .Values.initContainer.sidecarPortRangeStart }}-{{ .Values.initContainer.sidecarPortRangeEnd }})
               iptables -t filter -A SIDECAR_ISOLATE -d 127.0.0.1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset
