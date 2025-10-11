@@ -417,7 +417,8 @@ func NewLDSServer(domains []string) (*LDSServer, error) {
 // buildAccessLog creates stdout access logging configuration
 func buildAccessLog() ([]*accesslog.AccessLog, error) {
 	// Create file access log config for stdout
-	// Use JSON format as text_format has known issues (https://github.com/envoyproxy/envoy/issues/12348)
+	// Use minimal JSON format with only well-supported tokens
+	// See: https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log/usage
 	fileAccessLog := &file_accesslog.FileAccessLog{
 		Path: "/dev/stdout",
 		AccessLogFormat: &file_accesslog.FileAccessLog_LogFormat{
@@ -425,21 +426,12 @@ func buildAccessLog() ([]*accesslog.AccessLog, error) {
 				Format: &core.SubstitutionFormatString_JsonFormat{
 					JsonFormat: &_struct.Struct{
 						Fields: map[string]*_struct.Value{
-							"start_time":            {Kind: &_struct.Value_StringValue{StringValue: "%START_TIME%"}},
-							"method":                {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:METHOD)%"}},
-							"path":                  {Kind: &_struct.Value_StringValue{StringValue: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"}},
-							"protocol":              {Kind: &_struct.Value_StringValue{StringValue: "%PROTOCOL%"}},
-							"response_code":         {Kind: &_struct.Value_StringValue{StringValue: "%RESPONSE_CODE%"}},
-							"response_flags":        {Kind: &_struct.Value_StringValue{StringValue: "%RESPONSE_FLAGS%"}},
-							"bytes_received":        {Kind: &_struct.Value_StringValue{StringValue: "%BYTES_RECEIVED%"}},
-							"bytes_sent":            {Kind: &_struct.Value_StringValue{StringValue: "%BYTES_SENT%"}},
-							"duration":              {Kind: &_struct.Value_StringValue{StringValue: "%DURATION%"}},
-							"upstream_service_time": {Kind: &_struct.Value_StringValue{StringValue: "%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%"}},
-							"x_forwarded_for":       {Kind: &_struct.Value_StringValue{StringValue: "%REQ(X-FORWARDED-FOR)%"}},
-							"user_agent":            {Kind: &_struct.Value_StringValue{StringValue: "%REQ(USER-AGENT)%"}},
-							"request_id":            {Kind: &_struct.Value_StringValue{StringValue: "%REQ(X-REQUEST-ID)%"}},
-							"authority":             {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:AUTHORITY)%"}},
-							"upstream_host":         {Kind: &_struct.Value_StringValue{StringValue: "%UPSTREAM_HOST%"}},
+							"method":        {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:METHOD)%"}},
+							"path":          {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:PATH)%"}},
+							"protocol":      {Kind: &_struct.Value_StringValue{StringValue: "%PROTOCOL%"}},
+							"response_code": {Kind: &_struct.Value_StringValue{StringValue: "%RESPONSE_CODE%"}},
+							"authority":     {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:AUTHORITY)%"}},
+							"duration":      {Kind: &_struct.Value_StringValue{StringValue: "%DURATION%"}},
 						},
 					},
 				},
