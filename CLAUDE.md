@@ -1,1 +1,2 @@
 - use uv-based Python virtualenv for this project
+- CN=blocked.local us a default/fallback TLS filter chain certificate which is used as a catch-all for requests to domain which is not allowed in policy
