@@ -24,7 +24,7 @@ import (
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	accesslog "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
-	file_accesslog "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/file/v3"
+	stdout_accesslog "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
 	dynamic_forward_proxy_cluster "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy_common "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
@@ -416,12 +416,10 @@ func NewLDSServer(domains []string) (*LDSServer, error) {
 
 // buildAccessLog creates stdout access logging configuration
 func buildAccessLog() ([]*accesslog.AccessLog, error) {
-	// Create file access log config for stdout
-	// Use minimal JSON format with only well-supported tokens
-	// See: https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log/usage
-	fileAccessLog := &file_accesslog.FileAccessLog{
-		Path: "/dev/stdout",
-		AccessLogFormat: &file_accesslog.FileAccessLog_LogFormat{
+	// Use StdoutAccessLog for proper stdout logging in Kubernetes
+	// See: https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/accesslog/v3/accesslog.proto.html
+	stdoutAccessLog := &stdout_accesslog.StdoutAccessLog{
+		AccessLogFormat: &stdout_accesslog.StdoutAccessLog_LogFormat{
 			LogFormat: &core.SubstitutionFormatString{
 				Format: &core.SubstitutionFormatString_JsonFormat{
 					JsonFormat: &_struct.Struct{
@@ -439,16 +437,16 @@ func buildAccessLog() ([]*accesslog.AccessLog, error) {
 		},
 	}
 
-	fileAccessLogAny, err := anypb.New(fileAccessLog)
+	stdoutAccessLogAny, err := anypb.New(stdoutAccessLog)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal file access log: %w", err)
+		return nil, fmt.Errorf("failed to marshal stdout access log: %w", err)
 	}
 
 	return []*accesslog.AccessLog{
 		{
-			Name: "envoy.access_loggers.file",
+			Name: "envoy.access_loggers.stdout",
 			ConfigType: &accesslog.AccessLog_TypedConfig{
-				TypedConfig: fileAccessLogAny,
+				TypedConfig: stdoutAccessLogAny,
 			},
 		},
 	}, nil
