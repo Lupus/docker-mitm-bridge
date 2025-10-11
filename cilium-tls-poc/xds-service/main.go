@@ -416,16 +416,13 @@ func NewLDSServer(domains []string) (*LDSServer, error) {
 // buildAccessLog creates stdout access logging configuration
 func buildAccessLog() ([]*accesslog.AccessLog, error) {
 	// Create file access log config for stdout
+	// Use a simplified format without DYNAMIC_METADATA to avoid potential issues
 	fileAccessLog := &file_accesslog.FileAccessLog{
 		Path: "/dev/stdout",
 		AccessLogFormat: &file_accesslog.FileAccessLog_LogFormat{
 			LogFormat: &core.SubstitutionFormatString{
-				Format: &core.SubstitutionFormatString_TextFormatSource{
-					TextFormatSource: &core.DataSource{
-						Specifier: &core.DataSource_InlineString{
-							InlineString: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" \"ext_authz:%DYNAMIC_METADATA(envoy.filters.http.ext_authz:ext_authz_duration)%\"\n",
-						},
-					},
+				Format: &core.SubstitutionFormatString_TextFormat{
+					TextFormat: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\"\n",
 				},
 			},
 		},

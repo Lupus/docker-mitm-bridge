@@ -87,10 +87,25 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 }
 
 @test "Envoy logs show ext_authz activity for non-whitelisted domains" {
-    # SKIP: Envoy access logs are not being written (known issue)
-    # See cilium-tls-poc/ENVOY_ACCESS_LOG_ISSUE.md for details
-    # ext_authz activity is verified via OPA logs in the next test
-    skip "Envoy access logs not working - see ENVOY_ACCESS_LOG_ISSUE.md"
+    POD_NAME=$(get_pod_name "test-app")
+
+    log_info "Making request to trigger Envoy access logging..."
+    # Use -k to skip cert verification (expected cert name mismatch for blocked domains)
+    exec_in_pod "$POD_NAME" "test-container" \
+        "curl -k -s --max-time 10 https://google.com" || true
+
+    # Give Envoy time to log
+    sleep 2
+
+    # Check Envoy access logs
+    ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -100)
+    log_info "Checking Envoy logs for access log entries..."
+
+    # Should see access log entries with request details
+    # Look for patterns from our access log format: [timestamp] "METHOD PATH PROTOCOL" response_code
+    [[ "$ENVOY_LOGS" =~ "google.com" ]] || \
+    [[ "$ENVOY_LOGS" =~ "GET" ]] || \
+    [[ "$ENVOY_LOGS" =~ "403" ]]
 }
 
 @test "OPA logs show policy denials for non-whitelisted domains" {
