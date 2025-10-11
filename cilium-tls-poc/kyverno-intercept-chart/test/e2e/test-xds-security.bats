@@ -87,10 +87,31 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 }
 
 @test "Envoy logs show ext_authz activity for non-whitelisted domains" {
-    # SKIP: Envoy access logs are not being written (known issue)
-    # See cilium-tls-poc/ENVOY_ACCESS_LOG_ISSUE.md for details
-    # ext_authz activity is verified via OPA logs in the next test
-    skip "Envoy access logs not working - see ENVOY_ACCESS_LOG_ISSUE.md"
+    POD_NAME=$(get_pod_name "test-app")
+
+    log_info "Making request to trigger Envoy access logging..."
+    # Use -k to skip cert verification (expected cert name mismatch for blocked domains)
+    exec_in_pod "$POD_NAME" "test-container" \
+        "curl -k -s --max-time 10 https://google.com" || true
+
+    # Give Envoy time to log
+    sleep 2
+
+    # Check Envoy access logs
+    ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -100)
+    log_info "Checking Envoy logs for access log entries..."
+
+    # Debug: Show lines that look like text access logs (contain timestamp in brackets)
+    log_info "--- Envoy Access Log Entries (if any) ---"
+    echo "$ENVOY_LOGS" | grep -E '^\[20[0-9]{2}-' || echo "(No access log entries found)"
+    log_info "---"
+
+    # Should see text-based access log entries with request details
+    # Access logs are in text format like: [2025-10-11T13:22:33.994Z] "GET /path HTTP/1.1" 403 ...
+    # Check for: timestamp, HTTP method, and domain (google.com)
+    [[ "$ENVOY_LOGS" =~ \[20[0-9]{2}- ]] && \
+    [[ "$ENVOY_LOGS" =~ google\.com ]] && \
+    [[ "$ENVOY_LOGS" =~ \"(GET|POST|PUT|DELETE|HEAD|OPTIONS) ]]
 }
 
 @test "OPA logs show policy denials for non-whitelisted domains" {
