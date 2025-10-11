@@ -23,6 +23,8 @@ import (
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	accesslog "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
+	file_accesslog "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/file/v3"
 	dynamic_forward_proxy_cluster "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy_common "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
@@ -411,17 +413,216 @@ func NewLDSServer(domains []string) (*LDSServer, error) {
 	return server, nil
 }
 
-func (s *LDSServer) buildListener() error {
-	log.Println("Building Envoy listener configuration...")
+// buildAccessLog creates stdout access logging configuration
+func buildAccessLog() ([]*accesslog.AccessLog, error) {
+	// Create file access log config for stdout
+	fileAccessLog := &file_accesslog.FileAccessLog{
+		Path: "/dev/stdout",
+		AccessLogFormat: &file_accesslog.FileAccessLog_LogFormat{
+			LogFormat: &core.SubstitutionFormatString{
+				Format: &core.SubstitutionFormatString_TextFormatSource{
+					TextFormatSource: &core.DataSource{
+						Specifier: &core.DataSource_InlineString{
+							InlineString: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" \"ext_authz:%DYNAMIC_METADATA(envoy.filters.http.ext_authz:ext_authz_duration)%\"\n",
+						},
+					},
+				},
+			},
+		},
+	}
 
-	// Build filter chains for each domain
+	fileAccessLogAny, err := anypb.New(fileAccessLog)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal file access log: %w", err)
+	}
+
+	return []*accesslog.AccessLog{
+		{
+			Name: "envoy.access_loggers.file",
+			ConfigType: &accesslog.AccessLog_TypedConfig{
+				TypedConfig: fileAccessLogAny,
+			},
+		},
+	}, nil
+}
+
+func (s *LDSServer) buildListener() error {
+	log.Println("Building Envoy listener configuration (dual listeners: HTTP + HTTPS)...")
+
+	listeners := make([]*anypb.Any, 0, 2)
+
+	// ========================================
+	// HTTP Listener (port 15001) - Plain HTTP traffic from port 80
+	// ========================================
+	httpListener, err := s.buildHTTPListener()
+	if err != nil {
+		return fmt.Errorf("failed to build HTTP listener: %w", err)
+	}
+	listeners = append(listeners, httpListener)
+
+	// ========================================
+	// HTTPS Listener (port 15002) - TLS traffic from port 443
+	// ========================================
+	httpsListener, err := s.buildHTTPSListener()
+	if err != nil {
+		return fmt.Errorf("failed to build HTTPS listener: %w", err)
+	}
+	listeners = append(listeners, httpsListener)
+
+	s.listenerCache = listeners
+	log.Printf("Listener configuration built with %d listeners", len(listeners))
+	return nil
+}
+
+// buildHTTPListener creates a listener for plain HTTP traffic (port 80 → 15001)
+func (s *LDSServer) buildHTTPListener() (*anypb.Any, error) {
+	log.Println("Building HTTP listener (port 15001)...")
+
+	// Create ext_authz filter for HTTP traffic
+	extAuthzConfig := &ext_authz.ExtAuthz{
+		Services: &ext_authz.ExtAuthz_GrpcService{
+			GrpcService: &core.GrpcService{
+				TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+					EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+						ClusterName: "ext_authz_cluster",
+					},
+				},
+				Timeout: durationpb.New(10 * time.Second),
+			},
+		},
+		TransportApiVersion: core.ApiVersion_V3,
+	}
+	extAuthzAny, err := anypb.New(extAuthzConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ext_authz config: %w", err)
+	}
+
+	// Build access logging configuration
+	accessLogs, err := buildAccessLog()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build access log: %w", err)
+	}
+
+	// Create HTTP Connection Manager for plain HTTP
+	httpManager := &hcm.HttpConnectionManager{
+		CodecType:  hcm.HttpConnectionManager_AUTO,
+		StatPrefix: "ingress_http_plain",
+		AccessLog:  accessLogs,
+		RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
+			RouteConfig: &route.RouteConfiguration{
+				Name: "local_route_http",
+				VirtualHosts: []*route.VirtualHost{
+					{
+						Name:    "http_vhost",
+						Domains: []string{"*"},
+						Routes: []*route.Route{
+							{
+								Match: &route.RouteMatch{
+									PathSpecifier: &route.RouteMatch_Prefix{
+										Prefix: "/",
+									},
+								},
+								Action: &route.Route_Route{
+									Route: &route.RouteAction{
+										ClusterSpecifier: &route.RouteAction_Cluster{
+											Cluster: "dynamic_forward_proxy_cluster",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		HttpFilters: []*hcm.HttpFilter{
+			{
+				Name: "envoy.filters.http.ext_authz",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: extAuthzAny,
+				},
+			},
+			{
+				Name: "envoy.filters.http.dynamic_forward_proxy",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: func() *anypb.Any {
+						dfpFilterConfig := &dynamic_forward_proxy.FilterConfig{
+							ImplementationSpecifier: &dynamic_forward_proxy.FilterConfig_DnsCacheConfig{
+								DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
+									Name:            "dynamic_forward_proxy_cache_config",
+									DnsLookupFamily: cluster.Cluster_V4_ONLY,
+									MaxHosts:        wrapperspb.UInt32(100),
+								},
+							},
+						}
+						any, _ := anypb.New(dfpFilterConfig)
+						return any
+					}(),
+				},
+			},
+			{
+				Name: "envoy.filters.http.router",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: func() *anypb.Any {
+						routerConfig := &router.Router{}
+						any, _ := anypb.New(routerConfig)
+						return any
+					}(),
+				},
+			},
+		},
+	}
+
+	httpManagerAny, err := anypb.New(httpManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal http connection manager: %w", err)
+	}
+
+	// Create HTTP listener
+	httpListener := &listener.Listener{
+		Name: "http_listener",
+		Address: &core.Address{
+			Address: &core.Address_SocketAddress{
+				SocketAddress: &core.SocketAddress{
+					Protocol: core.SocketAddress_TCP,
+					Address:  "0.0.0.0",
+					PortSpecifier: &core.SocketAddress_PortValue{
+						PortValue: 15001,
+					},
+				},
+			},
+		},
+		FilterChains: []*listener.FilterChain{
+			{
+				Filters: []*listener.Filter{
+					{
+						Name: wellknown.HTTPConnectionManager,
+						ConfigType: &listener.Filter_TypedConfig{
+							TypedConfig: httpManagerAny,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return anypb.New(httpListener)
+}
+
+// buildHTTPSListener creates a listener for HTTPS traffic (port 443 → 15002)
+func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
+	log.Println("Building HTTPS listener (port 15002)...")
+
+	// Build filter chains: SNI-specific chains + fallback TLS chain
 	filterChains := make([]*listener.FilterChain, 0, len(s.domains)+1)
 
-	// Create HTTP Connection Manager configuration
+	// ========================================
+	// SNI-Specific Filter Chains (whitelisted domains)
+	// ========================================
 	for _, domain := range s.domains {
-		log.Printf("Adding filter chain for domain: %s", domain)
+		log.Printf("Adding SNI filter chain for whitelisted domain: %s", domain)
 
-		// Create ext_authz filter
+		// Create ext_authz filter for whitelisted domains
 		extAuthzConfig := &ext_authz.ExtAuthz{
 			Services: &ext_authz.ExtAuthz_GrpcService{
 				GrpcService: &core.GrpcService{
@@ -438,20 +639,27 @@ func (s *LDSServer) buildListener() error {
 
 		extAuthzAny, err := anypb.New(extAuthzConfig)
 		if err != nil {
-			return fmt.Errorf("failed to marshal ext_authz config: %w", err)
+			return nil, fmt.Errorf("failed to marshal ext_authz config: %w", err)
 		}
 
 		// Create router filter
 		routerConfig := &router.Router{}
 		routerAny, err := anypb.New(routerConfig)
 		if err != nil {
-			return fmt.Errorf("failed to marshal router config: %w", err)
+			return nil, fmt.Errorf("failed to marshal router config: %w", err)
+		}
+
+		// Build access logging configuration
+		accessLogs, err := buildAccessLog()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build access log for domain %s: %w", domain, err)
 		}
 
 		// Create HTTP Connection Manager
 		manager := &hcm.HttpConnectionManager{
 			CodecType:  hcm.HttpConnectionManager_AUTO,
 			StatPrefix: fmt.Sprintf("ingress_http_%s", sanitizeDomain(domain)),
+			AccessLog:  accessLogs,
 			RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
 				RouteConfig: &route.RouteConfiguration{
 					Name: fmt.Sprintf("local_route_%s", sanitizeDomain(domain)),
@@ -515,7 +723,7 @@ func (s *LDSServer) buildListener() error {
 
 		managerAny, err := anypb.New(manager)
 		if err != nil {
-			return fmt.Errorf("failed to marshal http connection manager: %w", err)
+			return nil, fmt.Errorf("failed to marshal http connection manager: %w", err)
 		}
 
 		// Create downstream TLS context
@@ -549,7 +757,7 @@ func (s *LDSServer) buildListener() error {
 
 		downstreamTLSAny, err := anypb.New(downstreamTLS)
 		if err != nil {
-			return fmt.Errorf("failed to marshal downstream TLS context: %w", err)
+			return nil, fmt.Errorf("failed to marshal downstream TLS context: %w", err)
 		}
 
 		// Create filter chain with SNI matching
@@ -576,19 +784,47 @@ func (s *LDSServer) buildListener() error {
 		filterChains = append(filterChains, filterChain)
 	}
 
-	// Add default filter chain for non-TLS traffic (HTTP on port 80)
-	log.Println("Adding default filter chain for HTTP traffic...")
+	// ========================================
+	// Fallback Filter Chain (non-whitelisted HTTPS domains)
+	// ========================================
+	log.Println("Adding fallback TLS filter chain for non-whitelisted domains...")
 
-	// Create HTTP Connection Manager for plain HTTP
-	httpManager := &hcm.HttpConnectionManager{
+	// Create ext_authz filter for fallback chain (SECURITY: enforce OPA policy to return 403)
+	extAuthzConfigFallback := &ext_authz.ExtAuthz{
+		Services: &ext_authz.ExtAuthz_GrpcService{
+			GrpcService: &core.GrpcService{
+				TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+					EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+						ClusterName: "ext_authz_cluster",
+					},
+				},
+				Timeout: durationpb.New(10 * time.Second),
+			},
+		},
+		TransportApiVersion: core.ApiVersion_V3,
+	}
+	extAuthzAnyFallback, err := anypb.New(extAuthzConfigFallback)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ext_authz config for fallback chain: %w", err)
+	}
+
+	// Build access logging configuration for fallback
+	fallbackAccessLogs, err := buildAccessLog()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build access log for fallback chain: %w", err)
+	}
+
+	// Create HTTP Connection Manager for fallback TLS chain
+	fallbackManager := &hcm.HttpConnectionManager{
 		CodecType:  hcm.HttpConnectionManager_AUTO,
-		StatPrefix: "ingress_http_plain",
+		StatPrefix: "ingress_https_fallback",
+		AccessLog:  fallbackAccessLogs,
 		RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
 			RouteConfig: &route.RouteConfiguration{
-				Name: "local_route_http",
+				Name: "local_route_https_fallback",
 				VirtualHosts: []*route.VirtualHost{
 					{
-						Name:    "http_vhost",
+						Name:    "https_fallback_vhost",
 						Domains: []string{"*"},
 						Routes: []*route.Route{
 							{
@@ -611,6 +847,13 @@ func (s *LDSServer) buildListener() error {
 			},
 		},
 		HttpFilters: []*hcm.HttpFilter{
+			// SECURITY: Add ext_authz as first filter to enforce OPA policy (returns 403 for non-whitelisted)
+			{
+				Name: "envoy.filters.http.ext_authz",
+				ConfigType: &hcm.HttpFilter_TypedConfig{
+					TypedConfig: extAuthzAnyFallback,
+				},
+			},
 			{
 				Name: "envoy.filters.http.dynamic_forward_proxy",
 				ConfigType: &hcm.HttpFilter_TypedConfig{
@@ -642,42 +885,86 @@ func (s *LDSServer) buildListener() error {
 		},
 	}
 
-	httpManagerAny, err := anypb.New(httpManager)
+	fallbackManagerAny, err := anypb.New(fallbackManager)
 	if err != nil {
-		return fmt.Errorf("failed to marshal http connection manager: %w", err)
+		return nil, fmt.Errorf("failed to marshal http connection manager for fallback: %w", err)
 	}
 
-	// Default filter chain (no match criteria - matches everything that didn't match TLS chains)
-	defaultFilterChain := &listener.FilterChain{
-		Filters: []*listener.Filter{
-			{
-				Name: wellknown.HTTPConnectionManager,
-				ConfigType: &listener.Filter_TypedConfig{
-					TypedConfig: httpManagerAny,
+	// Create TLS context for fallback chain using a static placeholder domain
+	// This allows TLS termination for non-whitelisted domains
+	// Clients will get either:
+	// - TLS verification error (if they validate certificates) - certificate is for "blocked.local"
+	// - HTTP 403 from OPA (if they skip verification with curl -k)
+	fallbackTLS := &tlsv3.DownstreamTlsContext{
+		CommonTlsContext: &tlsv3.CommonTlsContext{
+			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
+				{
+					Name: "blocked.local",  // Static placeholder domain for fallback
+					SdsConfig: &core.ConfigSource{
+						ResourceApiVersion: core.ApiVersion_V3,
+						ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
+							ApiConfigSource: &core.ApiConfigSource{
+								ApiType:             core.ApiConfigSource_GRPC,
+								TransportApiVersion: core.ApiVersion_V3,
+								GrpcServices: []*core.GrpcService{
+									{
+										TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+											EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+												ClusterName: "xds_cluster",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 	}
 
-	filterChains = append(filterChains, defaultFilterChain)
+	fallbackTLSAny, err := anypb.New(fallbackTLS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal fallback TLS context: %w", err)
+	}
+
+	// Fallback filter chain (no SNI match - matches everything that didn't match whitelisted domains)
+	fallbackFilterChain := &listener.FilterChain{
+		Filters: []*listener.Filter{
+			{
+				Name: wellknown.HTTPConnectionManager,
+				ConfigType: &listener.Filter_TypedConfig{
+					TypedConfig: fallbackManagerAny,
+				},
+			},
+		},
+		TransportSocket: &core.TransportSocket{
+			Name: "envoy.transport_sockets.tls",
+			ConfigType: &core.TransportSocket_TypedConfig{
+				TypedConfig: fallbackTLSAny,
+			},
+		},
+	}
+
+	filterChains = append(filterChains, fallbackFilterChain)
 
 	// Create TLS inspector listener filter to extract SNI
 	tlsInspectorConfig := &tls_inspector.TlsInspector{}
 	tlsInspectorAny, err := anypb.New(tlsInspectorConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal tls inspector: %w", err)
+		return nil, fmt.Errorf("failed to marshal tls inspector: %w", err)
 	}
 
-	// Create the listener
-	lis := &listener.Listener{
-		Name: "listener_0",
+	// Create the HTTPS listener
+	httpsListener := &listener.Listener{
+		Name: "https_listener",
 		Address: &core.Address{
 			Address: &core.Address_SocketAddress{
 				SocketAddress: &core.SocketAddress{
 					Protocol: core.SocketAddress_TCP,
 					Address:  "0.0.0.0",
 					PortSpecifier: &core.SocketAddress_PortValue{
-						PortValue: 15001,
+						PortValue: 15002,
 					},
 				},
 			},
@@ -693,15 +980,7 @@ func (s *LDSServer) buildListener() error {
 		FilterChains: filterChains,
 	}
 
-	lisAny, err := anypb.New(lis)
-	if err != nil {
-		return fmt.Errorf("failed to marshal listener: %w", err)
-	}
-
-	s.listenerCache = []*anypb.Any{lisAny}
-
-	log.Printf("Listener configuration built with %d filter chains", len(filterChains))
-	return nil
+	return anypb.New(httpsListener)
 }
 
 func sanitizeDomain(domain string) string {

@@ -217,6 +217,7 @@ run_tests() {
         "test/e2e/test-opa-policy.bats"
         "test/e2e/test-port-isolation.bats"
         "test/e2e/test-network-isolation.bats"
+        "test/e2e/test-xds-security.bats"
     )
 
     local failed_tests=()

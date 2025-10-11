@@ -18,23 +18,52 @@ data:
 
     # Extract request details
     method := http_request.method
-    # Use host field directly, or fall back to :authority header
-    host := http_request.host
     path := http_request.path
+
+    # SECURITY: For HTTPS traffic, verify Host header matches TLS certificate CN
+    # For HTTP traffic, Host header is safe to use (no TLS to spoof)
+    tls_principal := input.attributes.destination.principal
+    http_host := http_request.host
+
+    # Use TLS CN if available (HTTPS), otherwise use Host header (HTTP)
+    # Handle both undefined and empty string cases
+    host := tls_principal if {
+        tls_principal
+        tls_principal != ""
+    }
+
+    host := http_host if {
+        not tls_principal
+    }
+
+    host := http_host if {
+        tls_principal == ""
+    }
+
+    # SECURITY CHECK: For HTTPS, reject if Host header doesn't match TLS certificate CN
+    # This prevents Host header manipulation attacks on TLS connections
+    host_header_mismatch if {
+        tls_principal
+        tls_principal != ""
+        tls_principal != http_host
+    }
 
     # Check if domain is in allowed list (restricted to GET/HEAD)
     allow if {
+      not host_header_mismatch  # Security check: reject if Host/TLS mismatch
       host in data.allowed_domains
       method in ["GET", "HEAD"]
     }
 
     # Check if domain is in unrestricted list (all methods allowed)
     allow if {
+      not host_header_mismatch  # Security check: reject if Host/TLS mismatch
       host in data.unrestricted_domains
     }
 
     # GitHub-specific rules
     allow if {
+      not host_header_mismatch  # Security check: reject if Host/TLS mismatch
       data.github_read_access_enabled
       contains(host, "github")
       method in ["GET", "HEAD"]
@@ -42,6 +71,7 @@ data:
 
     # GitHub write access for specific users/repos
     allow if {
+      not host_header_mismatch  # Security check: reject if Host/TLS mismatch
       contains(host, "github")
       method in ["POST", "PUT", "PATCH", "DELETE"]
       github_write_allowed

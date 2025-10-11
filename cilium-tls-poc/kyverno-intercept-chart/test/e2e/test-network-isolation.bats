@@ -105,7 +105,11 @@ setup_file() {
     # 2. OPA will likely block it (not in allowed domains)
     # 3. Or connection will fail for other reasons
     run exec_in_pod "$POD_NAME" "test-container" \
-        "timeout 5 curl -k -s https://kubernetes.default.svc/api 2>&1"
+        "timeout 5 curl -k -s -w '\nHTTP_CODE:%{http_code}' https://kubernetes.default.svc/api 2>&1"
+
+    # Debug: show actual output
+    log_info "K8s API request output: $output"
+    log_info "K8s API request status: $status"
 
     # Should fail (might be redirect issues, OPA block, or other)
     [ "$status" -ne 0 ] || [[ "$output" =~ "403" ]] || [[ "$output" =~ "error" ]]
