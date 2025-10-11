@@ -44,7 +44,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
-	_struct "google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -414,22 +413,34 @@ func NewLDSServer(domains []string) (*LDSServer, error) {
 	return server, nil
 }
 
-// buildAccessLog creates stdout access logging configuration
+// buildAccessLog creates stderr access logging configuration with text format
 func buildAccessLog() ([]*accesslog.AccessLog, error) {
-	// Use StdoutAccessLog for proper stdout logging in Kubernetes
+	// Use StderrAccessLog for proper stderr logging in Kubernetes
+	// Note: StdoutAccessLog does not work when configured via xDS (Envoy bug/limitation)
+	// Using text format for consistency with other Envoy logs and better readability
 	// See: https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/accesslog/v3/accesslog.proto.html
-	stdoutAccessLog := &stdout_accesslog.StdoutAccessLog{
-		AccessLogFormat: &stdout_accesslog.StdoutAccessLog_LogFormat{
+
+	// Comprehensive access log format with fields useful for auditing:
+	// - Timestamp and request identifiers
+	// - Client information (IP, port)
+	// - Request details (method, path, protocol, host)
+	// - Response details (code, flags, body size)
+	// - Timing information (duration, request/response times)
+	// - Upstream information (cluster, host, response code)
+	// - Security context (connection security, SNI)
+	logFormat := "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" " +
+		"%RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% " +
+		"%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(:AUTHORITY)%\" \"%DOWNSTREAM_REMOTE_ADDRESS%\" " +
+		"\"%UPSTREAM_CLUSTER%\" \"%UPSTREAM_HOST%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(USER-AGENT)%\" " +
+		"\"%DOWNSTREAM_LOCAL_ADDRESS%\" \"%REQUESTED_SERVER_NAME%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\"\n"
+
+	stderrAccessLog := &stdout_accesslog.StderrAccessLog{
+		AccessLogFormat: &stdout_accesslog.StderrAccessLog_LogFormat{
 			LogFormat: &core.SubstitutionFormatString{
-				Format: &core.SubstitutionFormatString_JsonFormat{
-					JsonFormat: &_struct.Struct{
-						Fields: map[string]*_struct.Value{
-							"method":        {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:METHOD)%"}},
-							"path":          {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:PATH)%"}},
-							"protocol":      {Kind: &_struct.Value_StringValue{StringValue: "%PROTOCOL%"}},
-							"response_code": {Kind: &_struct.Value_StringValue{StringValue: "%RESPONSE_CODE%"}},
-							"authority":     {Kind: &_struct.Value_StringValue{StringValue: "%REQ(:AUTHORITY)%"}},
-							"duration":      {Kind: &_struct.Value_StringValue{StringValue: "%DURATION%"}},
+				Format: &core.SubstitutionFormatString_TextFormatSource{
+					TextFormatSource: &core.DataSource{
+						Specifier: &core.DataSource_InlineString{
+							InlineString: logFormat,
 						},
 					},
 				},
@@ -437,16 +448,16 @@ func buildAccessLog() ([]*accesslog.AccessLog, error) {
 		},
 	}
 
-	stdoutAccessLogAny, err := anypb.New(stdoutAccessLog)
+	stderrAccessLogAny, err := anypb.New(stderrAccessLog)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal stdout access log: %w", err)
+		return nil, fmt.Errorf("failed to marshal stderr access log: %w", err)
 	}
 
 	return []*accesslog.AccessLog{
 		{
-			Name: "envoy.access_loggers.stdout",
+			Name: "envoy.access_loggers.stderr",
 			ConfigType: &accesslog.AccessLog_TypedConfig{
-				TypedConfig: stdoutAccessLogAny,
+				TypedConfig: stderrAccessLogAny,
 			},
 		},
 	}, nil
