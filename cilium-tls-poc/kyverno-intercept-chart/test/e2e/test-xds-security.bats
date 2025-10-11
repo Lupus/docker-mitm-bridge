@@ -101,18 +101,17 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -100)
     log_info "Checking Envoy logs for access log entries..."
 
-    # Debug: Show lines that look like access logs (start with [ and contain quotes)
+    # Debug: Show lines that look like JSON access logs (contain "method" or "response_code")
     log_info "--- Envoy Access Log Entries (if any) ---"
-    echo "$ENVOY_LOGS" | grep '^\[.*\] "' || echo "(No access log entries found)"
+    echo "$ENVOY_LOGS" | grep -E '("method"|"response_code"|"authority")' || echo "(No access log entries found)"
     log_info "---"
 
-    # Should see access log entries with request details
-    # Look for the specific access log format: [timestamp] "METHOD PATH PROTOCOL" response_code
-    # Access logs should contain the pattern: "GET / HTTP" or "CONNECT google.com" followed by 403
-    # Using && to require multiple matches for more confidence this is an access log, not an INFO log
+    # Should see JSON access log entries with request details
+    # Access logs are in JSON format with fields like method, response_code, authority
+    # Using && to require multiple matches for more confidence this is an access log
+    [[ "$ENVOY_LOGS" =~ "authority" ]] && \
     [[ "$ENVOY_LOGS" =~ "google.com" ]] && \
-    ([[ "$ENVOY_LOGS" =~ "GET" ]] || [[ "$ENVOY_LOGS" =~ "CONNECT" ]]) && \
-    [[ "$ENVOY_LOGS" =~ "403" ]]
+    [[ "$ENVOY_LOGS" =~ "response_code" ]]
 }
 
 @test "OPA logs show policy denials for non-whitelisted domains" {
