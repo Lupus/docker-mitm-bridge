@@ -41,28 +41,27 @@ jobs:
         run: |
           sudo npm install -g bats
 
-      - name: Build xDS Service Image
+      - name: Set Image Tag
         run: |
           IMAGE_TAG="ci-${GITHUB_SHA::8}"
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
-          echo "Building xDS service image with tag: ${IMAGE_TAG}"
+          echo "Will use xDS image tag: ${IMAGE_TAG}"
 
+      - name: Build xDS Service Image
+        run: |
+          echo "Building xDS service image with tag: ${IMAGE_TAG}"
           cd cilium-tls-poc/xds-service
           docker build -t ghcr.io/lupus/docker-mitm-bridge/xds-service:${IMAGE_TAG} .
-
           echo "Image built successfully"
           docker images ghcr.io/lupus/docker-mitm-bridge/xds-service:${IMAGE_TAG}
 
-      - name: Create kind cluster
-        uses: helm/kind-action@v1.12.0
-        with:
-          cluster_name: kyverno-test
-          node_image: kindest/node:v1.31.9
-          wait: 120s
-
-      - name: Load xDS Service Image to kind
+      - name: Create kind cluster and load image
         run: |
-          echo "Loading image with tag: ${IMAGE_TAG}"
+          # Create cluster
+          kind create cluster --name kyverno-test --image kindest/node:v1.31.9 --wait 120s
+
+          # Load the xDS service image
+          echo "Loading xDS image with tag: ${IMAGE_TAG}"
           kind load docker-image ghcr.io/lupus/docker-mitm-bridge/xds-service:${IMAGE_TAG} --name kyverno-test
           echo "Image loaded to kind cluster"
 
