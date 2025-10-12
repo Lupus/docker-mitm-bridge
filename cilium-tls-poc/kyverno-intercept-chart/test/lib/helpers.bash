@@ -235,18 +235,21 @@ wait_for_log_entry() {
 
     log_info "Waiting for log entry matching '$pattern' in $container..."
 
-    local elapsed=0
-    while [ "$elapsed" -lt "$timeout" ]; do
+    local attempts=0
+    local max_attempts=$(awk "BEGIN {print int($timeout / $interval)}")
+
+    while [ "$attempts" -lt "$max_attempts" ]; do
         local logs
         logs=$(kubectl logs -n "$namespace" "$pod_name" -c "$container" 2>/dev/null || true)
 
         if echo "$logs" | grep -q "$pattern"; then
+            local elapsed=$(awk "BEGIN {print $attempts * $interval}")
             log_info "Found matching log entry after ${elapsed}s"
             return 0
         fi
 
         sleep "$interval"
-        elapsed=$(echo "$elapsed + $interval" | bc)
+        attempts=$((attempts + 1))
     done
 
     log_error "Timeout waiting for log entry matching '$pattern' after ${timeout}s"
