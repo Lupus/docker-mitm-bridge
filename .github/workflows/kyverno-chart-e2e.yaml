@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'cilium-tls-poc/kyverno-intercept-chart/**'
+      - 'cilium-tls-poc/xds-service/**'
       - '.github/workflows/kyverno-chart-e2e.yaml'
   push:
     branches:
       - main
     paths:
       - 'cilium-tls-poc/kyverno-intercept-chart/**'
+      - 'cilium-tls-poc/xds-service/**'
       - '.github/workflows/kyverno-chart-e2e.yaml'
   workflow_dispatch:
 
@@ -39,12 +41,30 @@ jobs:
         run: |
           sudo npm install -g bats
 
+      - name: Build xDS Service Image
+        run: |
+          IMAGE_TAG="ci-${GITHUB_SHA::8}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          echo "Building xDS service image with tag: ${IMAGE_TAG}"
+
+          cd cilium-tls-poc/xds-service
+          docker build -t ghcr.io/lupus/docker-mitm-bridge/xds-service:${IMAGE_TAG} .
+
+          echo "Image built successfully"
+          docker images ghcr.io/lupus/docker-mitm-bridge/xds-service:${IMAGE_TAG}
+
       - name: Create kind cluster
         uses: helm/kind-action@v1.12.0
         with:
           cluster_name: kyverno-test
           node_image: kindest/node:v1.31.9
           wait: 120s
+
+      - name: Load xDS Service Image to kind
+        run: |
+          echo "Loading image with tag: ${IMAGE_TAG}"
+          kind load docker-image ghcr.io/lupus/docker-mitm-bridge/xds-service:${IMAGE_TAG} --name kyverno-test
+          echo "Image loaded to kind cluster"
 
       - name: Verify cluster
         run: |
@@ -75,13 +95,16 @@ jobs:
         run: |
           kubectl create namespace kyverno-intercept
 
+          echo "Installing chart with xDS image tag: ${IMAGE_TAG}"
           helm upgrade --install intercept-proxy . \
             -n kyverno-intercept \
             --wait \
             --timeout 5m \
-            --set testWorkload.enabled=false
+            --set testWorkload.enabled=false \
+            --set xds.image.tag=${IMAGE_TAG} \
+            --set xds.image.pullPolicy=IfNotPresent
 
-          echo "Chart installed, CA will be generated inline by init containers"
+          echo "Chart installed with CI-built xDS image, CA will be generated inline by init containers"
 
       - name: Verify chart installation
         run: |
