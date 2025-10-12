@@ -51,17 +51,37 @@ This script will:
 # Set isolated kubeconfig
 export KUBECONFIG=/tmp/xds-test-kubeconfig
 
-# Create kind cluster
+# Create kind cluster with log rotation enabled (prevents log accumulation)
 cat > /tmp/kind-config.yaml <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: xds-test
 nodes:
 - role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: KubeletConfiguration
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    # Enable log rotation to prevent disk space exhaustion
+    containerLogMaxSize: 50Mi
+    containerLogMaxFiles: 3
+    containerLogMaxWorkers: 2
 EOF
 
 kind create cluster --config /tmp/kind-config.yaml
+
+# Verify log rotation is configured
+docker exec xds-test-control-plane cat /var/lib/kubelet/config.yaml | grep -A 3 containerLog
+# Expected output:
+# containerLogMaxFiles: 3
+# containerLogMaxSize: 50Mi
+# containerLogMaxWorkers: 2
 ```
+
+**Important:** Log rotation prevents excessive log accumulation that can consume 100GB+ of disk space (see `LOG_ROTATION_ISSUE.md` for details). With these settings:
+- Logs rotate automatically when they reach 50MB
+- Maximum 3 rotated files kept per container (~200MB max per container)
+- No manual cleanup needed
 
 ### 2. Build and Load xDS Service Image
 
@@ -514,6 +534,14 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CLUSTER_NAME}
 nodes:
 - role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: KubeletConfiguration
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    # Enable log rotation to prevent disk space exhaustion
+    containerLogMaxSize: 50Mi
+    containerLogMaxFiles: 3
+    containerLogMaxWorkers: 2
 EOF
     kind create cluster --config /tmp/kind-config.yaml
 fi

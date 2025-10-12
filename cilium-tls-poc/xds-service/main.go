@@ -266,7 +266,8 @@ func (s *SDSServer) StreamSecrets(stream secret.SecretDiscoveryService_StreamSec
 			return err
 		}
 
-		log.Printf("Received SDS request: %+v", req)
+		log.Printf("Received SDS request for %d resources (version: %s, nonce: %s)",
+			len(req.ResourceNames), req.VersionInfo, req.ResponseNonce)
 
 		resources := make([]*anypb.Any, 0)
 
@@ -335,7 +336,8 @@ func (s *SDSServer) DeltaSecrets(secret.SecretDiscoveryService_DeltaSecretsServe
 }
 
 func (s *SDSServer) FetchSecrets(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
-	log.Printf("FetchSecrets called with request: %+v", req)
+	log.Printf("FetchSecrets called for %d resources (version: %s)",
+		len(req.ResourceNames), req.VersionInfo)
 
 	resources := make([]*anypb.Any, 0)
 
@@ -1023,7 +1025,8 @@ func (s *LDSServer) StreamListeners(stream listenerservice.ListenerDiscoveryServ
 			return err
 		}
 
-		log.Printf("Received LDS request: %+v", req)
+		log.Printf("Received LDS request for %d resources (version: %s, nonce: %s)",
+			len(req.ResourceNames), req.VersionInfo, req.ResponseNonce)
 
 		s.mu.RLock()
 		resp := &discovery.DiscoveryResponse{
@@ -1048,7 +1051,8 @@ func (s *LDSServer) DeltaListeners(listenerservice.ListenerDiscoveryService_Delt
 }
 
 func (s *LDSServer) FetchListeners(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
-	log.Printf("FetchListeners called with request: %+v", req)
+	log.Printf("FetchListeners called for %d resources (version: %s)",
+		len(req.ResourceNames), req.VersionInfo)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1223,7 +1227,8 @@ func (s *CDSServer) StreamClusters(stream clusterservice.ClusterDiscoveryService
 			return err
 		}
 
-		log.Printf("Received CDS request: %+v", req)
+		log.Printf("Received CDS request for %d resources (version: %s, nonce: %s)",
+			len(req.ResourceNames), req.VersionInfo, req.ResponseNonce)
 
 		s.mu.RLock()
 		resp := &discovery.DiscoveryResponse{
@@ -1248,7 +1253,8 @@ func (s *CDSServer) DeltaClusters(clusterservice.ClusterDiscoveryService_DeltaCl
 }
 
 func (s *CDSServer) FetchClusters(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
-	log.Printf("FetchClusters called with request: %+v", req)
+	log.Printf("FetchClusters called for %d resources (version: %s)",
+		len(req.ResourceNames), req.VersionInfo)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()

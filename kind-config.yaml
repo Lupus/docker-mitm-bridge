@@ -1,0 +1,31 @@
+# kind cluster configuration with log rotation best practices
+# This configuration prevents excessive log accumulation by rotating container logs
+# when they reach specified size limits.
+#
+# Key settings:
+# - containerLogMaxSize: 50Mi - Rotate logs when they reach 50MB
+# - containerLogMaxFiles: 3 - Keep 3 rotated log files (current + 3 = ~200MB max per container)
+# - containerLogMaxWorkers: 2 - Handle rotation for multiple high-volume containers concurrently
+#
+# Note: kubectl logs only shows the latest log file. With 50Mi size, you'll see up to 50Mi of logs.
+# Older rotated logs are kept on disk but not accessible via kubectl logs.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: KubeletConfiguration
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    # Maximum size of container log file before rotation
+    # Logs will rotate when they reach this size
+    containerLogMaxSize: 50Mi
+
+    # Maximum number of rotated log files to keep per container
+    # Older files are deleted when this limit is exceeded
+    containerLogMaxFiles: 3
+
+    # Optional: Advanced tuning for high-volume logging
+    # Maximum number of concurrent log rotation workers
+    containerLogMaxWorkers: 2
