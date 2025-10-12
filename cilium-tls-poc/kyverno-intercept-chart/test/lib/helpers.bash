@@ -223,10 +223,40 @@ test_opa_decision() {
     fi
 }
 
+# Wait for log entry matching pattern to appear in container logs
+# Uses polling/retry pattern to handle kubectl logs API delays
+wait_for_log_entry() {
+    local pod_name=$1
+    local container=$2
+    local pattern=$3
+    local namespace=${4:-kyverno-intercept}
+    local timeout=${5:-10}
+    local interval=${6:-0.5}
+
+    log_info "Waiting for log entry matching '$pattern' in $container..."
+
+    local elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        local logs
+        logs=$(kubectl logs -n "$namespace" "$pod_name" -c "$container" 2>/dev/null || true)
+
+        if echo "$logs" | grep -q "$pattern"; then
+            log_info "Found matching log entry after ${elapsed}s"
+            return 0
+        fi
+
+        sleep "$interval"
+        elapsed=$(echo "$elapsed + $interval" | bc)
+    done
+
+    log_error "Timeout waiting for log entry matching '$pattern' after ${timeout}s"
+    return 1
+}
+
 # Export functions for use in tests
 export -f log_info log_warn log_error
 export -f wait_for_pod_ready get_pod_name exec_in_pod
 export -f test_http_access test_port_blocked test_port_accessible
 export -f verify_cert_issuer count_pod_containers get_container_uid
 export -f check_init_container get_container_logs cleanup_test_resources
-export -f test_opa_decision
+export -f test_opa_decision wait_for_log_entry
