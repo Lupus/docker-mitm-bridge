@@ -92,18 +92,28 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     log_info "Making multiple requests to trigger Envoy access logging and force buffer flush..."
     # Use -k to skip cert verification (expected cert name mismatch for blocked domains)
     # Make several requests to force log buffer flush (reduced logging = less frequent flushes)
-    for i in {1..5}; do
+    for i in {1..10}; do
         exec_in_pod "$POD_NAME" "test-container" \
             "curl -k -s --max-time 10 https://google.com" || true
-        sleep 0.5
+        sleep 0.3
     done
 
-    # Give Envoy time to flush logs to stderr/kubectl
-    sleep 3
+    # Wait with retries for access logs to appear (handles both buffer flush + kubectl API delays)
+    log_info "Waiting for access logs to appear in kubectl logs..."
+    for attempt in {1..10}; do
+        sleep 1
+        ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -150)
 
-    # Get logs for verification
-    ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -100)
-    log_info "Checking Envoy logs for access log entries..."
+        # Check if access logs are present
+        if echo "$ENVOY_LOGS" | grep -q -E '^\[20[0-9]{2}-[0-9]{2}-[0-9]{2}T.*google\.com'; then
+            log_info "Access logs found after ${attempt} seconds"
+            break
+        fi
+
+        if [ $attempt -eq 10 ]; then
+            log_info "No access logs found after 10 seconds, proceeding with test"
+        fi
+    done
 
     # Debug: Show lines that look like text access logs (contain timestamp with T separator)
     log_info "--- Envoy Access Log Entries (if any) ---"
