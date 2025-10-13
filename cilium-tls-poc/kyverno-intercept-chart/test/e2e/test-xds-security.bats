@@ -95,21 +95,23 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
         "curl -k -s --max-time 10 https://google.com" || true
 
     # Wait for access logs to appear (handles kubectl logs API delays)
-    wait_for_log_entry "$POD_NAME" "envoy-proxy" "google\.com" "kyverno-intercept" 15 0.5
+    # Look for ISO 8601 timestamp format with T separator (access logs vs info logs)
+    wait_for_log_entry "$POD_NAME" "envoy-proxy" '\[20[0-9]{2}-[0-9]{2}-[0-9]{2}T.*google\.com' "kyverno-intercept" 15 0.5
 
     # Get logs for verification
     ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -100)
     log_info "Checking Envoy logs for access log entries..."
 
-    # Debug: Show lines that look like text access logs (contain timestamp in brackets)
+    # Debug: Show lines that look like text access logs (contain timestamp with T separator)
     log_info "--- Envoy Access Log Entries (if any) ---"
-    echo "$ENVOY_LOGS" | grep -E '^\[20[0-9]{2}-' || echo "(No access log entries found)"
+    echo "$ENVOY_LOGS" | grep -E '^\[20[0-9]{2}-[0-9]{2}-[0-9]{2}T' || echo "(No access log entries found)"
     log_info "---"
 
     # Should see text-based access log entries with request details
     # Access logs are in text format like: [2025-10-11T13:22:33.994Z] "GET /path HTTP/1.1" 403 ...
-    # Check for: timestamp, HTTP method, and domain (google.com)
-    [[ "$ENVOY_LOGS" =~ \[20[0-9]{2}- ]] && \
+    # Note: Access logs use ISO 8601 format with 'T' separator, unlike info logs
+    # Check for: timestamp with T, HTTP method, and domain (google.com)
+    [[ "$ENVOY_LOGS" =~ \[20[0-9]{2}-[0-9]{2}-[0-9]{2}T ]] && \
     [[ "$ENVOY_LOGS" =~ google\.com ]] && \
     [[ "$ENVOY_LOGS" =~ \"(GET|POST|PUT|DELETE|HEAD|OPTIONS) ]]
 }
