@@ -24,7 +24,7 @@ EOF
 fi
 
 echo "==> Building and loading xDS service image..."
-docker build -t xds-service:test .
+docker build --network=host -t xds-service:test .
 kind load docker-image xds-service:test --name ${CLUSTER_NAME}
 
 echo "==> Creating namespace..."
