@@ -89,14 +89,17 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 @test "Envoy logs show ext_authz activity for non-whitelisted domains" {
     POD_NAME=$(get_pod_name "test-app")
 
-    log_info "Making request to trigger Envoy access logging..."
+    log_info "Making multiple requests to trigger Envoy access logging and force buffer flush..."
     # Use -k to skip cert verification (expected cert name mismatch for blocked domains)
-    exec_in_pod "$POD_NAME" "test-container" \
-        "curl -k -s --max-time 10 https://google.com" || true
+    # Make several requests to force log buffer flush (reduced logging = less frequent flushes)
+    for i in {1..5}; do
+        exec_in_pod "$POD_NAME" "test-container" \
+            "curl -k -s --max-time 10 https://google.com" || true
+        sleep 0.5
+    done
 
-    # Wait for access logs to appear (handles kubectl logs API delays)
-    # Look for ISO 8601 timestamp format with T separator (access logs vs info logs)
-    wait_for_log_entry "$POD_NAME" "envoy-proxy" '\[20[0-9]{2}-[0-9]{2}-[0-9]{2}T.*google\.com' "kyverno-intercept" 15 0.5
+    # Give Envoy time to flush logs to stderr/kubectl
+    sleep 3
 
     # Get logs for verification
     ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -100)
