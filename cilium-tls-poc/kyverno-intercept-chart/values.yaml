@@ -44,7 +44,7 @@ certificates:
 
 # Envoy proxy configuration
 envoy:
-  image: envoyproxy/envoy:v1.28-latest
+  image: envoyproxy/envoy:v1.32.2
   resources:
     limits:
       memory: "256Mi"

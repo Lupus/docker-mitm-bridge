@@ -24,7 +24,7 @@ import (
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	accesslog "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
-	file_accesslog "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/file/v3"
+	stdout_accesslog "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
 	dynamic_forward_proxy_cluster "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy_common "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
 	dynamic_forward_proxy "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
@@ -266,7 +266,8 @@ func (s *SDSServer) StreamSecrets(stream secret.SecretDiscoveryService_StreamSec
 			return err
 		}
 
-		log.Printf("Received SDS request: %+v", req)
+		log.Printf("Received SDS request for %d resources (version: %s, nonce: %s)",
+			len(req.ResourceNames), req.VersionInfo, req.ResponseNonce)
 
 		resources := make([]*anypb.Any, 0)
 
@@ -335,7 +336,8 @@ func (s *SDSServer) DeltaSecrets(secret.SecretDiscoveryService_DeltaSecretsServe
 }
 
 func (s *SDSServer) FetchSecrets(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
-	log.Printf("FetchSecrets called with request: %+v", req)
+	log.Printf("FetchSecrets called for %d resources (version: %s)",
+		len(req.ResourceNames), req.VersionInfo)
 
 	resources := make([]*anypb.Any, 0)
 
@@ -413,17 +415,34 @@ func NewLDSServer(domains []string) (*LDSServer, error) {
 	return server, nil
 }
 
-// buildAccessLog creates stdout access logging configuration
+// buildAccessLog creates stderr access logging configuration with text format
 func buildAccessLog() ([]*accesslog.AccessLog, error) {
-	// Create file access log config for stdout
-	fileAccessLog := &file_accesslog.FileAccessLog{
-		Path: "/dev/stdout",
-		AccessLogFormat: &file_accesslog.FileAccessLog_LogFormat{
+	// Use StderrAccessLog for proper stderr logging in Kubernetes
+	// Note: StdoutAccessLog does not work when configured via xDS (Envoy bug/limitation)
+	// Using text format for consistency with other Envoy logs and better readability
+	// See: https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/accesslog/v3/accesslog.proto.html
+
+	// Comprehensive access log format with fields useful for auditing:
+	// - Timestamp and request identifiers
+	// - Client information (IP, port)
+	// - Request details (method, path, protocol, host)
+	// - Response details (code, flags, body size)
+	// - Timing information (duration, request/response times)
+	// - Upstream information (cluster, host, response code)
+	// - Security context (connection security, SNI)
+	logFormat := "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" " +
+		"%RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% " +
+		"%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(:AUTHORITY)%\" \"%DOWNSTREAM_REMOTE_ADDRESS%\" " +
+		"\"%UPSTREAM_CLUSTER%\" \"%UPSTREAM_HOST%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(USER-AGENT)%\" " +
+		"\"%DOWNSTREAM_LOCAL_ADDRESS%\" \"%REQUESTED_SERVER_NAME%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\"\n"
+
+	stderrAccessLog := &stdout_accesslog.StderrAccessLog{
+		AccessLogFormat: &stdout_accesslog.StderrAccessLog_LogFormat{
 			LogFormat: &core.SubstitutionFormatString{
 				Format: &core.SubstitutionFormatString_TextFormatSource{
 					TextFormatSource: &core.DataSource{
 						Specifier: &core.DataSource_InlineString{
-							InlineString: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" \"ext_authz:%DYNAMIC_METADATA(envoy.filters.http.ext_authz:ext_authz_duration)%\"\n",
+							InlineString: logFormat,
 						},
 					},
 				},
@@ -431,16 +450,16 @@ func buildAccessLog() ([]*accesslog.AccessLog, error) {
 		},
 	}
 
-	fileAccessLogAny, err := anypb.New(fileAccessLog)
+	stderrAccessLogAny, err := anypb.New(stderrAccessLog)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal file access log: %w", err)
+		return nil, fmt.Errorf("failed to marshal stderr access log: %w", err)
 	}
 
 	return []*accesslog.AccessLog{
 		{
-			Name: "envoy.access_loggers.file",
+			Name: "envoy.access_loggers.stderr",
 			ConfigType: &accesslog.AccessLog_TypedConfig{
-				TypedConfig: fileAccessLogAny,
+				TypedConfig: stderrAccessLogAny,
 			},
 		},
 	}, nil
@@ -1006,7 +1025,8 @@ func (s *LDSServer) StreamListeners(stream listenerservice.ListenerDiscoveryServ
 			return err
 		}
 
-		log.Printf("Received LDS request: %+v", req)
+		log.Printf("Received LDS request for %d resources (version: %s, nonce: %s)",
+			len(req.ResourceNames), req.VersionInfo, req.ResponseNonce)
 
 		s.mu.RLock()
 		resp := &discovery.DiscoveryResponse{
@@ -1031,7 +1051,8 @@ func (s *LDSServer) DeltaListeners(listenerservice.ListenerDiscoveryService_Delt
 }
 
 func (s *LDSServer) FetchListeners(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
-	log.Printf("FetchListeners called with request: %+v", req)
+	log.Printf("FetchListeners called for %d resources (version: %s)",
+		len(req.ResourceNames), req.VersionInfo)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1206,7 +1227,8 @@ func (s *CDSServer) StreamClusters(stream clusterservice.ClusterDiscoveryService
 			return err
 		}
 
-		log.Printf("Received CDS request: %+v", req)
+		log.Printf("Received CDS request for %d resources (version: %s, nonce: %s)",
+			len(req.ResourceNames), req.VersionInfo, req.ResponseNonce)
 
 		s.mu.RLock()
 		resp := &discovery.DiscoveryResponse{
@@ -1231,7 +1253,8 @@ func (s *CDSServer) DeltaClusters(clusterservice.ClusterDiscoveryService_DeltaCl
 }
 
 func (s *CDSServer) FetchClusters(ctx context.Context, req *discovery.DiscoveryRequest) (*discovery.DiscoveryResponse, error) {
-	log.Printf("FetchClusters called with request: %+v", req)
+	log.Printf("FetchClusters called for %d resources (version: %s)",
+		len(req.ResourceNames), req.VersionInfo)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()

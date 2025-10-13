@@ -87,10 +87,46 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 }
 
 @test "Envoy logs show ext_authz activity for non-whitelisted domains" {
-    # SKIP: Envoy access logs are not being written (known issue)
-    # See cilium-tls-poc/ENVOY_ACCESS_LOG_ISSUE.md for details
-    # ext_authz activity is verified via OPA logs in the next test
-    skip "Envoy access logs not working - see ENVOY_ACCESS_LOG_ISSUE.md"
+    POD_NAME=$(get_pod_name "test-app")
+
+    log_info "Making multiple requests to trigger Envoy access logging and force buffer flush..."
+    # Use -k to skip cert verification (expected cert name mismatch for blocked domains)
+    # Make several requests to force log buffer flush (reduced logging = less frequent flushes)
+    for i in {1..10}; do
+        exec_in_pod "$POD_NAME" "test-container" \
+            "curl -k -s --max-time 10 https://google.com" || true
+        sleep 0.3
+    done
+
+    # Wait with retries for access logs to appear (handles both buffer flush + kubectl API delays)
+    log_info "Waiting for access logs to appear in kubectl logs..."
+    for attempt in {1..10}; do
+        sleep 1
+        ENVOY_LOGS=$(get_container_logs "$POD_NAME" "envoy-proxy" | tail -150)
+
+        # Check if access logs are present
+        if echo "$ENVOY_LOGS" | grep -q -E '^\[20[0-9]{2}-[0-9]{2}-[0-9]{2}T.*google\.com'; then
+            log_info "Access logs found after ${attempt} seconds"
+            break
+        fi
+
+        if [ $attempt -eq 10 ]; then
+            log_info "No access logs found after 10 seconds, proceeding with test"
+        fi
+    done
+
+    # Debug: Show lines that look like text access logs (contain timestamp with T separator)
+    log_info "--- Envoy Access Log Entries (if any) ---"
+    echo "$ENVOY_LOGS" | grep -E '^\[20[0-9]{2}-[0-9]{2}-[0-9]{2}T' || echo "(No access log entries found)"
+    log_info "---"
+
+    # Should see text-based access log entries with request details
+    # Access logs are in text format like: [2025-10-11T13:22:33.994Z] "GET /path HTTP/1.1" 403 ...
+    # Note: Access logs use ISO 8601 format with 'T' separator, unlike info logs
+    # Check for: timestamp with T, HTTP method, and domain (google.com)
+    [[ "$ENVOY_LOGS" =~ \[20[0-9]{2}-[0-9]{2}-[0-9]{2}T ]] && \
+    [[ "$ENVOY_LOGS" =~ google\.com ]] && \
+    [[ "$ENVOY_LOGS" =~ \"(GET|POST|PUT|DELETE|HEAD|OPTIONS) ]]
 }
 
 @test "OPA logs show policy denials for non-whitelisted domains" {
