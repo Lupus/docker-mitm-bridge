@@ -153,8 +153,11 @@ EOF
     [[ "$output" =~ "example.com" ]]
 }
 
-@test "Annotation changes trigger ConfigMap update (via synchronize)" {
-    # Update the pod annotation (by recreating the pod with different annotation)
+@test "Pod recreation with updated annotation creates updated ConfigMap" {
+    # Note: Kyverno's synchronize: true ensures ConfigMap updates when pod annotations change.
+    # However, running pods don't pick up ConfigMap changes without restart (standard K8s behavior).
+    # This test verifies that recreating a pod with a new annotation generates an updated ConfigMap.
+
     kubectl delete pod custom-policy-pod -n kyverno-intercept --wait=true
 
     # Create pod with updated annotation

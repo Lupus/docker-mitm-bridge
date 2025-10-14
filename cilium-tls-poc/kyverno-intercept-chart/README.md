@@ -332,6 +332,148 @@ The init container sets up two sets of rules:
 - Allow outbound HTTP/HTTPS (will be redirected by NAT)
 - Drop all other traffic from main container
 
+### Per-Pod Custom OPA Policies
+
+You can override the default OPA policy on a per-pod basis using the `intercept-proxy/opa-data` annotation. This is useful when different workloads need different access policies.
+
+#### Basic Example
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    metadata:
+      labels:
+        intercept-proxy/enabled: "true"
+      annotations:
+        intercept-proxy/opa-data: |
+          allowed_domains: []
+          unrestricted_domains:
+            - "api.anthropic.com"
+            - "api.openai.com"
+            - "internal-api.company.local"
+          github_read_access_enabled: false
+          github_allowed_users: []
+          github_allowed_repos: []
+          aws_access_enabled: false
+          aws_allowed_services: []
+    spec:
+      securityContext:
+        runAsUser: 12345
+      containers:
+      - name: my-app
+        image: my-app:latest
+```
+
+#### How It Works
+
+1. **ConfigMap Generation**: When a pod with the `intercept-proxy/opa-data` annotation is created, Kyverno automatically generates a unique ConfigMap named `{pod-name}-opa-policy` containing:
+   - The standard `policy.rego` rules (from the chart)
+   - Custom `data.yml` from the annotation
+
+2. **Automatic Mounting**: The pod is automatically configured to mount this per-pod ConfigMap instead of the default one
+
+3. **Lifecycle Management**: The ConfigMap is automatically cleaned up when the pod is deleted (Kyverno handles this via `synchronize: true`)
+
+#### Updating Policies
+
+⚠️ **Important**: Due to standard Kubernetes behavior, **running pods won't pick up policy changes without a restart**. ConfigMap volume mounts are cached by kubelet.
+
+**To update a policy:**
+
+```bash
+# For Deployments (recommended approach)
+# 1. Update the annotation in your deployment manifest
+kubectl apply -f deployment.yaml
+
+# 2. Trigger a rolling update (if annotation change doesn't trigger one)
+kubectl rollout restart deployment/my-app -n my-namespace
+
+# For individual Pods
+# 1. Delete and recreate the pod
+kubectl delete pod my-pod -n my-namespace
+kubectl apply -f pod.yaml
+```
+
+**GitOps Workflow (Recommended):**
+```yaml
+# In your Git repository, update the deployment:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    metadata:
+      annotations:
+        intercept-proxy/opa-data: |
+          unrestricted_domains:
+            - "api.example.com"
+            - "new-api.company.com"  # Added new domain
+```
+
+When CI/CD applies this change, Kubernetes performs a rolling update, creating new pods with the updated policy.
+
+#### Testing Custom Policies
+
+You can test OPA policies locally before deploying:
+
+```bash
+# Navigate to the policies directory
+cd cilium-tls-poc/kyverno-intercept-chart/policies/
+
+# Test with OPA CLI
+opa eval -d policy.rego -d data.yml \
+  -i input.json \
+  'data.intercept.allow'
+
+# Or run policy tests
+opa test policy.rego policy_test.rego
+```
+
+#### Multiple Workloads with Different Policies
+
+Each pod can have completely different policies:
+
+```yaml
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frontend-app
+  labels:
+    intercept-proxy/enabled: "true"
+  annotations:
+    intercept-proxy/opa-data: |
+      unrestricted_domains:
+        - "api.stripe.com"
+        - "cdn.example.com"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: backend-worker
+  labels:
+    intercept-proxy/enabled: "true"
+  annotations:
+    intercept-proxy/opa-data: |
+      allowed_domains:
+        - "github.com"
+      unrestricted_domains:
+        - "api.openai.com"
+```
+
+Each pod gets its own ConfigMap with its specific policy, and they operate independently.
+
+#### Fallback Behavior
+
+- Pods **WITH** the `intercept-proxy/opa-data` annotation use their custom policy
+- Pods **WITHOUT** the annotation use the default policy from Helm `values.yaml`
+- This ensures backward compatibility with existing deployments
+
 ## Configuration Reference
 
 ### Key Values
