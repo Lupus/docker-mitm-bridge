@@ -318,8 +318,9 @@ spec:
               periodSeconds: 5
           {{- end }}
 
-  # Inject volumes
-  - name: inject-volumes
+  {{- if .Values.opa.enabled }}
+  # Generate per-pod OPA policy ConfigMap based on annotation
+  - name: generate-opa-policy-configmap
     match:
       any:
       - resources:
@@ -328,6 +329,76 @@ spec:
           selector:
             matchLabels:
               "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    preconditions:
+      all:
+      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
+        operator: NotEquals
+        value: ""
+    generate:
+      apiVersion: v1
+      kind: ConfigMap
+      name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      synchronize: true
+      data:
+        policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
+        data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
+  {{- end }}
+
+  # Inject volumes (for pods WITH custom opa-data annotation)
+  - name: inject-volumes-custom-opa
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    preconditions:
+      all:
+      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
+        operator: NotEquals
+        value: ""
+    mutate:
+      patchStrategicMerge:
+        spec:
+          volumes:
+          - name: ca-secret
+            emptyDir: {}  # xDS service generates CA at runtime and writes it here
+          - name: ca-certificates
+            emptyDir: {}
+          - name: ca-certificates-system
+            hostPath:
+              path: /etc/ssl/certs
+              type: Directory
+          - name: envoy-config
+            configMap:
+              name: {{ .Release.Name }}-envoy-config
+          {{- if .Values.opa.enabled }}
+          - name: opa-policy
+            configMap:
+              name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
+          - name: opa-config
+            configMap:
+              name: {{ .Release.Name }}-opa-config
+          {{- end }}
+
+  # Inject volumes (for pods WITHOUT custom opa-data annotation - use default)
+  - name: inject-volumes-default-opa
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    preconditions:
+      all:
+      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
+        operator: Equals
+        value: ""
     mutate:
       patchStrategicMerge:
         spec:

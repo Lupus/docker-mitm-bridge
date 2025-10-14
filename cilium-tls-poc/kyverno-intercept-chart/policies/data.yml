@@ -1,0 +1,35 @@
+# Sample OPA policy data for testing
+# This file can be used with `opa test` or `opa eval` commands
+# The actual data.yml used in production is generated from data.yml.tpl
+
+# Domains with restricted access (only GET/HEAD allowed)
+allowed_domains:
+  - "github.com"
+  - "api.github.com"
+  - "raw.githubusercontent.com"
+  - "pypi.org"
+  - "files.pythonhosted.org"
+  - "registry.npmjs.org"
+  - "crates.io"
+  - "archive.ubuntu.com"
+  - "deb.debian.org"
+
+# Domains with unrestricted access (all HTTP methods allowed)
+unrestricted_domains:
+  - "api.anthropic.com"
+  - "api.openai.com"
+
+# GitHub access control configuration
+github_read_access_enabled: true
+
+# GitHub users allowed to perform write operations
+github_allowed_users: []
+
+# Specific GitHub repositories allowed for write operations
+github_allowed_repos:
+  - "Lupus/circuitry-cad"
+
+# AWS domains configuration
+aws_access_enabled: false
+
+aws_allowed_services: []
