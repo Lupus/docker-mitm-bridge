@@ -265,11 +265,192 @@ EOF
     [[ ! "$DATA2" =~ "httpbin.org" ]]
 }
 
+@test "Deployment with custom annotation creates per-Deployment ConfigMap" {
+    log_info "Creating Deployment with custom OPA policy annotation..."
+
+    # Create a deployment with custom OPA annotation
+    kubectl apply -n kyverno-intercept -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment-custom-opa
+  labels:
+    app: test-deployment-opa
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: test-deployment-opa
+  template:
+    metadata:
+      labels:
+        app: test-deployment-opa
+        intercept-proxy/enabled: "true"
+      annotations:
+        intercept-proxy/opa-data: |
+          allowed_domains: []
+          unrestricted_domains:
+            - "postman-echo.com"
+            - "httpbin.org"
+          github_read_access_enabled: false
+          github_allowed_users: []
+          github_allowed_repos: []
+          aws_access_enabled: false
+          aws_allowed_services: []
+    spec:
+      securityContext:
+        runAsUser: 12347
+        runAsGroup: 12347
+        fsGroup: 12347
+      containers:
+      - name: test-container
+        image: curlimages/curl:latest
+        command: ["sleep", "3600"]
+EOF
+
+    # Wait for deployment to be ready
+    log_info "Waiting for Deployment to be ready..."
+    kubectl wait --for=condition=available deployment/test-deployment-custom-opa \
+        -n kyverno-intercept --timeout=180s
+
+    # Get the ReplicaSet name (owner of the pods)
+    REPLICASET_NAME=$(kubectl get replicaset -n kyverno-intercept \
+        -l app=test-deployment-opa -o jsonpath='{.items[0].metadata.name}')
+
+    log_info "ReplicaSet name: $REPLICASET_NAME"
+
+    # Wait for ConfigMap to be generated
+    sleep 10
+
+    # Verify the per-ReplicaSet ConfigMap was created by Kyverno
+    log_info "Checking if per-ReplicaSet ConfigMap was generated..."
+    run kubectl get configmap "${REPLICASET_NAME}-opa-policy" -n kyverno-intercept
+    [ "$status" -eq 0 ]
+
+    log_info "Per-ReplicaSet ConfigMap created successfully"
+}
+
+@test "Deployment ConfigMap contains policy and custom data" {
+    # Get the ReplicaSet name
+    REPLICASET_NAME=$(kubectl get replicaset -n kyverno-intercept \
+        -l app=test-deployment-opa -o jsonpath='{.items[0].metadata.name}')
+
+    # Verify policy.rego exists
+    POLICY_CONTENT=$(kubectl get configmap "${REPLICASET_NAME}-opa-policy" \
+        -n kyverno-intercept -o jsonpath='{.data.policy\.rego}')
+
+    [[ "$POLICY_CONTENT" =~ "package intercept" ]]
+    [[ "$POLICY_CONTENT" =~ "default allow = false" ]]
+    log_info "Policy content verified"
+
+    # Verify custom data exists
+    DATA_CONTENT=$(kubectl get configmap "${REPLICASET_NAME}-opa-policy" \
+        -n kyverno-intercept -o jsonpath='{.data.data\.yml}')
+
+    [[ "$DATA_CONTENT" =~ "postman-echo.com" ]]
+    [[ "$DATA_CONTENT" =~ "httpbin.org" ]]
+    log_info "Custom data content verified"
+}
+
+@test "All Deployment pods mount the same per-Deployment ConfigMap" {
+    # Get the ReplicaSet name
+    REPLICASET_NAME=$(kubectl get replicaset -n kyverno-intercept \
+        -l app=test-deployment-opa -o jsonpath='{.items[0].metadata.name}')
+
+    # Get all pod names from the deployment
+    POD_NAMES=$(kubectl get pods -n kyverno-intercept \
+        -l app=test-deployment-opa -o jsonpath='{.items[*].metadata.name}')
+
+    log_info "Checking ConfigMap mounts for pods: $POD_NAMES"
+
+    # Verify each pod mounts the same ConfigMap
+    for POD_NAME in $POD_NAMES; do
+        CONFIGMAP_NAME=$(kubectl get pod "$POD_NAME" -n kyverno-intercept \
+            -o jsonpath='{.spec.volumes[?(@.name=="opa-policy")].configMap.name}')
+
+        log_info "Pod $POD_NAME uses ConfigMap: $CONFIGMAP_NAME"
+
+        [ "$CONFIGMAP_NAME" = "${REPLICASET_NAME}-opa-policy" ]
+    done
+
+    log_info "All pods mount the same ConfigMap: ${REPLICASET_NAME}-opa-policy"
+}
+
+@test "Deployment pods enforce custom OPA policy" {
+    # Get any pod from the deployment
+    POD_NAME=$(kubectl get pods -n kyverno-intercept \
+        -l app=test-deployment-opa -o jsonpath='{.items[0].metadata.name}')
+
+    log_info "Testing custom OPA policy enforcement in pod: $POD_NAME"
+
+    # Wait for OPA to be ready
+    sleep 10
+
+    # httpbin.org should be allowed (in unrestricted_domains)
+    run exec_in_pod "$POD_NAME" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://httpbin.org/get"
+
+    [ "$status" -eq 0 ]
+    [[ ! "$output" = "403" ]]
+    log_info "httpbin.org access allowed (custom Deployment policy)"
+
+    # github.com should be blocked
+    run exec_in_pod "$POD_NAME" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "403" ]
+    log_info "github.com access blocked (not in custom Deployment policy)"
+}
+
+@test "Deployment update with new annotation updates ConfigMap" {
+    # Update the Deployment with different policy
+    kubectl patch deployment test-deployment-custom-opa -n kyverno-intercept --type=json -p='[
+        {
+            "op": "replace",
+            "path": "/spec/template/metadata/annotations/intercept-proxy~1opa-data",
+            "value": "allowed_domains: []\nunrestricted_domains:\n  - \"example.com\"\n  - \"httpstat.us\"\ngithub_read_access_enabled: false\ngithub_allowed_users: []\ngithub_allowed_repos: []\naws_access_enabled: false\naws_allowed_services: []"
+        }
+    ]'
+
+    # Wait for rollout to complete
+    log_info "Waiting for rollout to complete..."
+    kubectl rollout status deployment/test-deployment-custom-opa -n kyverno-intercept --timeout=180s
+
+    # Get the NEW ReplicaSet name (Deployment creates new ReplicaSet on update)
+    sleep 10
+    NEW_REPLICASET_NAME=$(kubectl get replicaset -n kyverno-intercept \
+        -l app=test-deployment-opa --sort-by=.metadata.creationTimestamp \
+        -o jsonpath='{.items[-1:].metadata.name}')
+
+    log_info "New ReplicaSet name: $NEW_REPLICASET_NAME"
+
+    # Wait for new ConfigMap to be generated
+    sleep 10
+
+    # Verify new ConfigMap exists
+    run kubectl get configmap "${NEW_REPLICASET_NAME}-opa-policy" -n kyverno-intercept
+    [ "$status" -eq 0 ]
+
+    # Verify ConfigMap has updated content
+    DATA_CONTENT=$(kubectl get configmap "${NEW_REPLICASET_NAME}-opa-policy" \
+        -n kyverno-intercept -o jsonpath='{.data.data\.yml}')
+
+    log_info "Updated ConfigMap data: $DATA_CONTENT"
+
+    # Should have the new domains
+    [[ "$DATA_CONTENT" =~ "example.com" ]]
+    [[ "$DATA_CONTENT" =~ "httpstat.us" ]]
+    # Should NOT have the old domains
+    [[ ! "$DATA_CONTENT" =~ "postman-echo.com" ]]
+}
+
 @test "Cleanup test pods and ConfigMaps" {
     log_info "Cleaning up custom policy test resources..."
 
     kubectl delete pod custom-policy-pod -n kyverno-intercept --ignore-not-found=true --wait=false
     kubectl delete pod custom-policy-pod-2 -n kyverno-intercept --ignore-not-found=true --wait=false
+    kubectl delete deployment test-deployment-custom-opa -n kyverno-intercept --ignore-not-found=true --wait=false
 
     # ConfigMaps should be cleaned up automatically by Kyverno when pods are deleted
     # Wait a bit to let cleanup happen

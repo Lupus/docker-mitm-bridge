@@ -319,8 +319,8 @@ spec:
           {{- end }}
 
   {{- if .Values.opa.enabled }}
-  # Generate per-pod OPA policy ConfigMap based on annotation
-  - name: generate-opa-policy-configmap
+  # Generate OPA policy ConfigMap for standalone pods (no owner references)
+  - name: generate-opa-policy-configmap-standalone
     match:
       any:
       - resources:
@@ -334,19 +334,27 @@ spec:
       - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
         operator: NotEquals
         value: ""
+      - key: "{{ `{{ request.object.metadata.ownerReferences[0].name || '' }}` }}"
+        operator: Equals
+        value: ""
     generate:
+      synchronize: true
       apiVersion: v1
       kind: ConfigMap
       name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
       namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
-      synchronize: true
+      # IMPORTANT: Nested 'data:' structure required for Kyverno generate rules
+      # First 'data:' tells Kyverno we're providing inline resource data
+      # Second 'data:' is the actual ConfigMap's data field containing key-value pairs
+      # Without this nesting, K8s API treats policy.rego and data.yml as unknown ConfigMap fields
       data:
-        policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
-        data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
-  {{- end }}
+        data:
+          policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
+          data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
 
-  # Inject volumes (for pods WITH custom opa-data annotation)
-  - name: inject-volumes-custom-opa
+  # Generate OPA policy ConfigMap for Deployment/ReplicaSet pods (with owner references)
+  # All pods in same ReplicaSet share the same ConfigMap (named after ReplicaSet)
+  - name: generate-opa-policy-configmap-deployment
     match:
       any:
       - resources:
@@ -359,6 +367,43 @@ spec:
       all:
       - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
         operator: NotEquals
+        value: ""
+      - key: "{{ `{{ request.object.metadata.ownerReferences[0].name || '' }}` }}"
+        operator: NotEquals
+        value: ""
+    generate:
+      synchronize: true
+      apiVersion: v1
+      kind: ConfigMap
+      name: "{{ `{{ request.object.metadata.ownerReferences[0].name }}` }}-opa-policy"
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      # IMPORTANT: Nested 'data:' structure required for Kyverno generate rules
+      # First 'data:' tells Kyverno we're providing inline resource data
+      # Second 'data:' is the actual ConfigMap's data field containing key-value pairs
+      # Without this nesting, K8s API treats policy.rego and data.yml as unknown ConfigMap fields
+      data:
+        data:
+          policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
+          data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
+  {{- end }}
+
+  # Inject volumes for standalone pods WITH custom opa-data annotation
+  - name: inject-volumes-custom-opa-standalone
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    preconditions:
+      all:
+      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
+        operator: NotEquals
+        value: ""
+      - key: "{{ `{{ request.object.metadata.ownerReferences[0].name || '' }}` }}"
+        operator: Equals
         value: ""
     mutate:
       patchStrategicMerge:
@@ -379,6 +424,48 @@ spec:
           - name: opa-policy
             configMap:
               name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
+          - name: opa-config
+            configMap:
+              name: {{ .Release.Name }}-opa-config
+          {{- end }}
+
+  # Inject volumes for Deployment/ReplicaSet pods WITH custom opa-data annotation
+  - name: inject-volumes-custom-opa-deployment
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    preconditions:
+      all:
+      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
+        operator: NotEquals
+        value: ""
+      - key: "{{ `{{ request.object.metadata.ownerReferences[0].name || '' }}` }}"
+        operator: NotEquals
+        value: ""
+    mutate:
+      patchStrategicMerge:
+        spec:
+          volumes:
+          - name: ca-secret
+            emptyDir: {}  # xDS service generates CA at runtime and writes it here
+          - name: ca-certificates
+            emptyDir: {}
+          - name: ca-certificates-system
+            hostPath:
+              path: /etc/ssl/certs
+              type: Directory
+          - name: envoy-config
+            configMap:
+              name: {{ .Release.Name }}-envoy-config
+          {{- if .Values.opa.enabled }}
+          - name: opa-policy
+            configMap:
+              name: "{{ `{{ request.object.metadata.ownerReferences[0].name }}` }}-opa-policy"
           - name: opa-config
             configMap:
               name: {{ .Release.Name }}-opa-config
