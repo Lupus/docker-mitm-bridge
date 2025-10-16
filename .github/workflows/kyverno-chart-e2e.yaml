@@ -146,6 +146,11 @@ jobs:
         run: |
           bats test/e2e/test-xds-security.bats
 
+      - name: Run E2E Tests - Per-Pod OPA Policy
+        working-directory: cilium-tls-poc/kyverno-intercept-chart
+        run: |
+          bats test/e2e/test-per-pod-opa-policy.bats
+
       - name: Debug - Show pod details on failure
         if: failure()
         run: |
