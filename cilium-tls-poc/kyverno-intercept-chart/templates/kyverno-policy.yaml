@@ -345,14 +345,9 @@ spec:
       kind: ConfigMap
       name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
       namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
-      # IMPORTANT: Nested 'data:' structure required for Kyverno generate rules
-      # First 'data:' tells Kyverno we're providing inline resource data
-      # Second 'data:' is the actual ConfigMap's data field containing key-value pairs
-      # Without this nesting, K8s API treats policy.rego and data.yml as unknown ConfigMap fields
       data:
-        data:
-          policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
-          data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
+        policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
+        data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
 
   # Generate OPA policy ConfigMap for Deployment/ReplicaSet pods (with owner references)
   # All pods in same ReplicaSet share the same ConfigMap (named after ReplicaSet)
@@ -379,14 +374,9 @@ spec:
       kind: ConfigMap
       name: "{{ `{{ request.object.metadata.ownerReferences[0].name }}` }}-opa-policy"
       namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
-      # IMPORTANT: Nested 'data:' structure required for Kyverno generate rules
-      # First 'data:' tells Kyverno we're providing inline resource data
-      # Second 'data:' is the actual ConfigMap's data field containing key-value pairs
-      # Without this nesting, K8s API treats policy.rego and data.yml as unknown ConfigMap fields
       data:
-        data:
-          policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
-          data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
+        policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
+        data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
   {{- end }}
 
   # Inject volumes for standalone pods WITH custom opa-data annotation
