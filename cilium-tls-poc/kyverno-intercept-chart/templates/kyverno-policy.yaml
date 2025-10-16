@@ -3,7 +3,9 @@ kind: ClusterPolicy
 metadata:
   name: {{ .Release.Name }}-inject-proxy
 spec:
-  background: false
+  # IMPORTANT: background MUST be true for generate rules to work with new pods
+  # With background: false, generate rules only apply to resources that existed before the policy
+  background: true
   validationFailureAction: Audit
   rules:
   # Inject init container
