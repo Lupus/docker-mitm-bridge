@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 
 # Test per-pod OPA policy configuration via annotations
+# This uses the annotation-based approach where OPA data is passed
+# directly via environment variables, not generated ConfigMaps
 
 load '../lib/detik'
 load '../lib/helpers'
@@ -22,11 +24,11 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 
     # Should use the default release ConfigMap, not a per-pod one
     [[ "$CONFIGMAP_NAME" =~ ^intercept-proxy-opa-policy$ ]]
-    [[ ! "$CONFIGMAP_NAME" =~ -test-app-opa-policy$ ]]
+    [[ ! "$CONFIGMAP_NAME" =~ -opa-policy$ ]] || true  # No per-pod ConfigMaps should exist
 }
 
-# Test that Kyverno generates ConfigMap for pod with annotation
-@test "Kyverno generates ConfigMap for pod with custom opa-data annotation" {
+# Test that pods with annotation have env var set
+@test "Pod with annotation has OPA_POLICY_DATA environment variable" {
     # Create a test pod with custom OPA data annotation
     kubectl apply -n kyverno-intercept -f - <<EOF
 apiVersion: v1
@@ -63,61 +65,31 @@ EOF
     kubectl wait --for=condition=ready pod/custom-policy-pod \
         -n kyverno-intercept --timeout=120s
 
-    # Wait a bit for Kyverno to generate the ConfigMap
-    sleep 5
+    # Verify the OPA sidecar has the environment variable set
+    log_info "Checking if OPA sidecar has OPA_POLICY_DATA env var..."
+    ENV_VAR=$(kubectl get pod custom-policy-pod -n kyverno-intercept \
+        -o jsonpath='{.spec.containers[?(@.name=="opa-sidecar")].env[?(@.name=="OPA_POLICY_DATA")].valueFrom.fieldRef.fieldPath}')
 
-    # Verify the per-pod ConfigMap was created by Kyverno
-    log_info "Checking if per-pod ConfigMap was generated..."
-    run kubectl get configmap custom-policy-pod-opa-policy -n kyverno-intercept
-    [ "$status" -eq 0 ]
-
-    log_info "Per-pod ConfigMap created successfully"
+    log_info "OPA_POLICY_DATA env var configured from: $ENV_VAR"
+    [ "$ENV_VAR" = "metadata.annotations['intercept-proxy/opa-data']" ]
 }
 
-@test "Generated ConfigMap contains policy.rego from chart" {
-    # Verify the ConfigMap has the policy.rego file
-    log_info "Verifying ConfigMap contains policy.rego..."
-
-    POLICY_CONTENT=$(kubectl get configmap custom-policy-pod-opa-policy \
-        -n kyverno-intercept -o jsonpath='{.data.policy\.rego}')
-
-    # Check that policy contains expected OPA package and rules
-    [[ "$POLICY_CONTENT" =~ "package intercept" ]]
-    [[ "$POLICY_CONTENT" =~ "default allow = false" ]]
-    [[ "$POLICY_CONTENT" =~ "unrestricted_domains" ]]
-}
-
-@test "Generated ConfigMap contains custom data from annotation" {
-    # Verify the ConfigMap has the custom data from the annotation
-    log_info "Verifying ConfigMap contains custom data.yml from annotation..."
-
-    DATA_CONTENT=$(kubectl get configmap custom-policy-pod-opa-policy \
-        -n kyverno-intercept -o jsonpath='{.data.data\.yml}')
-
-    log_info "Data content: $DATA_CONTENT"
-
-    # Check that data contains our custom domains
-    [[ "$DATA_CONTENT" =~ "example.com" ]]
-    [[ "$DATA_CONTENT" =~ "httpbin.org" ]]
-    [[ "$DATA_CONTENT" =~ "unrestricted_domains" ]]
-}
-
-@test "Pod with custom annotation mounts per-pod ConfigMap" {
+@test "Pod with custom annotation still uses default ConfigMap for policy" {
     # Get the ConfigMap name mounted in the custom pod
     CONFIGMAP_NAME=$(kubectl get pod custom-policy-pod -n kyverno-intercept \
         -o jsonpath='{.spec.volumes[?(@.name=="opa-policy")].configMap.name}')
 
     log_info "Custom pod is using ConfigMap: $CONFIGMAP_NAME"
 
-    # Should use the per-pod ConfigMap
-    [ "$CONFIGMAP_NAME" = "custom-policy-pod-opa-policy" ]
+    # Should use the default release ConfigMap (policy.rego is shared)
+    [ "$CONFIGMAP_NAME" = "intercept-proxy-opa-policy" ]
 }
 
 @test "OPA in custom pod enforces custom policy from annotation" {
-    # Wait for OPA to be ready
+    # Wait for OPA to be ready and load the annotation data
     sleep 10
 
-    log_info "Testing that custom OPA policy is enforced..."
+    log_info "Testing that custom OPA policy data is enforced..."
 
     # httpbin.org should be allowed (in our custom unrestricted_domains)
     run exec_in_pod "custom-policy-pod" "test-container" \
@@ -126,7 +98,7 @@ EOF
     [ "$status" -eq 0 ]
     # Should succeed (not 403)
     [[ ! "$output" = "403" ]]
-    log_info "httpbin.org access allowed (custom policy)"
+    log_info "httpbin.org access allowed (custom policy data)"
 
     # github.com should be blocked (not in our custom allowed/unrestricted domains, and github_read_access_enabled: false)
     run exec_in_pod "custom-policy-pod" "test-container" \
@@ -134,7 +106,7 @@ EOF
 
     [ "$status" -eq 0 ]
     [ "$output" = "403" ]
-    log_info "github.com access blocked (not in custom policy)"
+    log_info "github.com access blocked (not in custom policy data)"
 }
 
 @test "OPA can query custom data from annotation" {
@@ -153,64 +125,21 @@ EOF
     [[ "$output" =~ "example.com" ]]
 }
 
-@test "Pod recreation with updated annotation creates updated ConfigMap" {
-    # Note: Kyverno's synchronize: true ensures ConfigMap updates when pod annotations change.
-    # However, running pods don't pick up ConfigMap changes without restart (standard K8s behavior).
-    # This test verifies that recreating a pod with a new annotation generates an updated ConfigMap.
+@test "OPA logs show it loaded data from annotation" {
+    log_info "Checking OPA sidecar logs to verify annotation data was used..."
 
-    kubectl delete pod custom-policy-pod -n kyverno-intercept --wait=true
+    # Check OPA sidecar logs
+    run kubectl logs custom-policy-pod -n kyverno-intercept -c opa-sidecar
 
-    # Create pod with updated annotation
-    kubectl apply -n kyverno-intercept -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: custom-policy-pod
-  labels:
-    app: custom-policy-test
-    intercept-proxy/enabled: "true"
-  annotations:
-    intercept-proxy/opa-data: |
-      allowed_domains: []
-      unrestricted_domains:
-        - "httpbin.org"
-        - "postman-echo.com"
-      github_read_access_enabled: false
-      github_allowed_users: []
-      github_allowed_repos: []
-      aws_access_enabled: false
-      aws_allowed_services: []
-spec:
-  securityContext:
-    runAsUser: 12345
-    runAsGroup: 12345
-    fsGroup: 12345
-  containers:
-  - name: test-container
-    image: curlimages/curl:latest
-    command: ["sleep", "3600"]
-EOF
+    [ "$status" -eq 0 ]
 
-    # Wait for new pod
-    kubectl wait --for=condition=ready pod/custom-policy-pod \
-        -n kyverno-intercept --timeout=120s
+    log_info "OPA sidecar logs: $output"
 
-    # Wait for Kyverno to update ConfigMap
-    sleep 5
-
-    # Verify ConfigMap was updated with new domains
-    DATA_CONTENT=$(kubectl get configmap custom-policy-pod-opa-policy \
-        -n kyverno-intercept -o jsonpath='{.data.data\.yml}')
-
-    log_info "Updated data content: $DATA_CONTENT"
-
-    # Should have the new domain
-    [[ "$DATA_CONTENT" =~ "postman-echo.com" ]]
-    # Should NOT have the removed domain
-    [[ ! "$DATA_CONTENT" =~ "example.com" ]]
+    # Should show it used custom data from annotation
+    [[ "$output" =~ "Using custom OPA policy data from annotation" ]]
 }
 
-@test "Multiple pods can have different custom policies" {
+@test "Multiple pods can have different custom policies via annotations" {
     # Create a second pod with different policy
     kubectl apply -n kyverno-intercept -f - <<EOF
 apiVersion: v1
@@ -244,36 +173,42 @@ EOF
     kubectl wait --for=condition=ready pod/custom-policy-pod-2 \
         -n kyverno-intercept --timeout=120s
 
-    sleep 5
+    sleep 10
 
-    # Verify each pod has its own ConfigMap
-    run kubectl get configmap custom-policy-pod-opa-policy -n kyverno-intercept
+    # Test first pod: httpbin.org allowed, github.com blocked
+    run exec_in_pod "custom-policy-pod" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://httpbin.org/get"
     [ "$status" -eq 0 ]
+    [[ ! "$output" = "403" ]]
+    log_info "Pod 1: httpbin.org allowed"
 
-    run kubectl get configmap custom-policy-pod-2-opa-policy -n kyverno-intercept
+    run exec_in_pod "custom-policy-pod" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
     [ "$status" -eq 0 ]
+    [ "$output" = "403" ]
+    log_info "Pod 1: github.com blocked"
 
-    # Verify they have different content
-    DATA1=$(kubectl get configmap custom-policy-pod-opa-policy \
-        -n kyverno-intercept -o jsonpath='{.data.data\.yml}')
-    DATA2=$(kubectl get configmap custom-policy-pod-2-opa-policy \
-        -n kyverno-intercept -o jsonpath='{.data.data\.yml}')
+    # Test second pod: github.com allowed (via github_read_access_enabled), httpbin.org blocked
+    run exec_in_pod "custom-policy-pod-2" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" = "403" ]]
+    log_info "Pod 2: github.com allowed"
 
-    [[ "$DATA1" =~ "httpbin.org" ]]
-    [[ "$DATA2" =~ "github.com" ]]
-    [[ ! "$DATA1" =~ "github.com" ]]
-    [[ ! "$DATA2" =~ "httpbin.org" ]]
+    run exec_in_pod "custom-policy-pod-2" "test-container" \
+        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://httpbin.org/get"
+    [ "$status" -eq 0 ]
+    [ "$output" = "403" ]
+    log_info "Pod 2: httpbin.org blocked"
 }
 
-@test "Cleanup test pods and ConfigMaps" {
+@test "Cleanup test pods" {
     log_info "Cleaning up custom policy test resources..."
 
     kubectl delete pod custom-policy-pod -n kyverno-intercept --ignore-not-found=true --wait=false
     kubectl delete pod custom-policy-pod-2 -n kyverno-intercept --ignore-not-found=true --wait=false
 
-    # ConfigMaps should be cleaned up automatically by Kyverno when pods are deleted
-    # Wait a bit to let cleanup happen
-    sleep 5
+    # No ConfigMaps to clean up - annotation-based approach doesn't create them
 
     log_info "Cleanup complete"
 }

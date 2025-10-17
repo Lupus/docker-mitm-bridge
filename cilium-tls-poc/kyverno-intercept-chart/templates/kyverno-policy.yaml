@@ -222,13 +222,34 @@ spec:
           - name: opa-sidecar
             image: {{ .Values.opa.image }}
             imagePullPolicy: IfNotPresent
+            env:
+            - name: OPA_POLICY_DATA
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['intercept-proxy/opa-data']
+            command:
+            - /bin/sh
+            - -c
             args:
-            - "run"
-            - "--server"
-            - "--addr=0.0.0.0:{{ .Values.opa.port }}"
-            - "--config-file=/config/config.yaml"
-            - "/policies/policy.rego"
-            - "/policies/data.yml"
+            - |
+              set -e
+
+              # Check if custom OPA data is provided via annotation
+              if [ -n "$OPA_POLICY_DATA" ]; then
+                echo "Using custom OPA policy data from annotation"
+                echo "$OPA_POLICY_DATA" > /tmp/data.yml
+                DATA_FILE="/tmp/data.yml"
+              else
+                echo "Using default OPA policy data from ConfigMap"
+                DATA_FILE="/policies/data.yml"
+              fi
+
+              # Start OPA with policy and data
+              exec opa run --server \
+                --addr=0.0.0.0:{{ .Values.opa.port }} \
+                --config-file=/config/config.yaml \
+                /policies/policy.rego \
+                "$DATA_FILE"
             ports:
             - name: opa
               containerPort: {{ .Values.opa.port }}
@@ -318,9 +339,8 @@ spec:
               periodSeconds: 5
           {{- end }}
 
-  {{- if .Values.opa.enabled }}
-  # Generate per-pod OPA policy ConfigMap based on annotation
-  - name: generate-opa-policy-configmap
+  # Inject volumes
+  - name: inject-volumes
     match:
       any:
       - resources:
@@ -329,76 +349,6 @@ spec:
           selector:
             matchLabels:
               "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
-    preconditions:
-      all:
-      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
-        operator: NotEquals
-        value: ""
-    generate:
-      apiVersion: v1
-      kind: ConfigMap
-      name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
-      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
-      synchronize: true
-      data:
-        policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
-        data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
-  {{- end }}
-
-  # Inject volumes (for pods WITH custom opa-data annotation)
-  - name: inject-volumes-custom-opa
-    match:
-      any:
-      - resources:
-          kinds:
-          - Pod
-          selector:
-            matchLabels:
-              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
-    preconditions:
-      all:
-      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
-        operator: NotEquals
-        value: ""
-    mutate:
-      patchStrategicMerge:
-        spec:
-          volumes:
-          - name: ca-secret
-            emptyDir: {}  # xDS service generates CA at runtime and writes it here
-          - name: ca-certificates
-            emptyDir: {}
-          - name: ca-certificates-system
-            hostPath:
-              path: /etc/ssl/certs
-              type: Directory
-          - name: envoy-config
-            configMap:
-              name: {{ .Release.Name }}-envoy-config
-          {{- if .Values.opa.enabled }}
-          - name: opa-policy
-            configMap:
-              name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
-          - name: opa-config
-            configMap:
-              name: {{ .Release.Name }}-opa-config
-          {{- end }}
-
-  # Inject volumes (for pods WITHOUT custom opa-data annotation - use default)
-  - name: inject-volumes-default-opa
-    match:
-      any:
-      - resources:
-          kinds:
-          - Pod
-          selector:
-            matchLabels:
-              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
-    preconditions:
-      all:
-      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
-        operator: Equals
-        value: ""
     mutate:
       patchStrategicMerge:
         spec:
