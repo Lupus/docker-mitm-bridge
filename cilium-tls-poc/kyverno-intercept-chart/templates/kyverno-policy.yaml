@@ -161,6 +161,50 @@ spec:
             - name: ca-certificates
               mountPath: /shared-ca-certs
 
+          {{- if .Values.opa.enabled }}
+          # OPA data setup init container - handles annotation-based policy data
+          - name: opa-data-setup
+            image: {{ .Values.initContainer.image }}  # Use same image as proxy-init (has shell)
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: OPA_POLICY_DATA
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['intercept-proxy/opa-data']
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Setting up OPA policy data..."
+
+              # Check if custom OPA data is provided via annotation
+              if [ -n "$OPA_POLICY_DATA" ]; then
+                echo "Using custom OPA policy data from annotation"
+                echo "$OPA_POLICY_DATA" > /opa-data/data.yml
+              else
+                echo "Using default OPA policy data from ConfigMap"
+                cp /policies-default/data.yml /opa-data/data.yml
+              fi
+
+              echo "OPA data file prepared at /opa-data/data.yml"
+              ls -la /opa-data/
+            volumeMounts:
+            - name: opa-data
+              mountPath: /opa-data
+            - name: opa-policy
+              mountPath: /policies-default
+              readOnly: true
+            securityContext:
+              runAsUser: {{ .Values.opa.uid }}
+              runAsGroup: {{ .Values.opa.gid }}
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+          {{- end }}
+
   # Inject Envoy sidecar
   - name: inject-envoy-sidecar
     match:
@@ -222,34 +266,13 @@ spec:
           - name: opa-sidecar
             image: {{ .Values.opa.image }}
             imagePullPolicy: IfNotPresent
-            env:
-            - name: OPA_POLICY_DATA
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.annotations['intercept-proxy/opa-data']
-            command:
-            - /bin/sh
-            - -c
             args:
-            - |
-              set -e
-
-              # Check if custom OPA data is provided via annotation
-              if [ -n "$OPA_POLICY_DATA" ]; then
-                echo "Using custom OPA policy data from annotation"
-                echo "$OPA_POLICY_DATA" > /tmp/data.yml
-                DATA_FILE="/tmp/data.yml"
-              else
-                echo "Using default OPA policy data from ConfigMap"
-                DATA_FILE="/policies/data.yml"
-              fi
-
-              # Start OPA with policy and data
-              exec opa run --server \
-                --addr=0.0.0.0:{{ .Values.opa.port }} \
-                --config-file=/config/config.yaml \
-                /policies/policy.rego \
-                "$DATA_FILE"
+            - "run"
+            - "--server"
+            - "--addr=0.0.0.0:{{ .Values.opa.port }}"
+            - "--config-file=/config/config.yaml"
+            - "/policies/policy.rego"
+            - "/opa-data/data.yml"  # Always read from here (prepared by init container)
             ports:
             - name: opa
               containerPort: {{ .Values.opa.port }}
@@ -273,6 +296,9 @@ spec:
               readOnly: true
             - name: opa-config
               mountPath: /config
+              readOnly: true
+            - name: opa-data
+              mountPath: /opa-data
               readOnly: true
             livenessProbe:
               httpGet:
@@ -371,6 +397,8 @@ spec:
           - name: opa-config
             configMap:
               name: {{ .Release.Name }}-opa-config
+          - name: opa-data
+            emptyDir: {}  # Shared volume for init container to prepare data for OPA
           {{- end }}
 
   # Inject CA certificates into all containers (except sidecars)
