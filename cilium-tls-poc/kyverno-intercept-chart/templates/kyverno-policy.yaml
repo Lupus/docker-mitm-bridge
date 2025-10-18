@@ -161,8 +161,21 @@ spec:
             - name: ca-certificates
               mountPath: /shared-ca-certs
 
-          {{- if .Values.opa.enabled }}
-          # OPA data setup init container - handles annotation-based policy data
+  {{- if .Values.opa.enabled }}
+  # Inject OPA data setup init container as a separate rule
+  - name: inject-opa-init-container
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          initContainers:
           - name: opa-data-setup
             image: {{ .Values.initContainer.image }}  # Use same image as proxy-init (has shell)
             imagePullPolicy: IfNotPresent
@@ -203,7 +216,7 @@ spec:
               capabilities:
                 drop:
                 - ALL
-          {{- end }}
+  {{- end }}
 
   # Inject Envoy sidecar
   - name: inject-envoy-sidecar
