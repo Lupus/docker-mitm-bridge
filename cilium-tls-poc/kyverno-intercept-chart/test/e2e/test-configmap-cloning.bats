@@ -230,8 +230,10 @@ EOF
     ORIGINAL_CONFIG=$(kubectl get configmap intercept-proxy-opa-config -n kyverno-intercept -o jsonpath='{.data.config\.yaml}')
 
     # Add a test comment to the source ConfigMap
+    # Properly escape the config for JSON: escape backslashes, quotes, and convert newlines to \n
+    ESCAPED_CONFIG=$(echo "$ORIGINAL_CONFIG" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
     kubectl patch configmap intercept-proxy-opa-config -n kyverno-intercept --type=json \
-        -p='[{"op": "replace", "path": "/data/config.yaml", "value": "# Test sync comment\n'"$ORIGINAL_CONFIG"'"}]'
+        -p='[{"op": "replace", "path": "/data/config.yaml", "value": "# Test sync comment\n'"$ESCAPED_CONFIG"'"}]'
 
     log_info "Updated source ConfigMap, waiting for synchronization..."
 
@@ -246,9 +248,10 @@ EOF
 
     log_info "ConfigMap synchronization verified"
 
-    # Restore original content
+    # Restore original content (properly escape for JSON)
+    RESTORE_ESCAPED=$(echo "$ORIGINAL_CONFIG" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
     kubectl patch configmap intercept-proxy-opa-config -n kyverno-intercept --type=json \
-        -p='[{"op": "replace", "path": "/data/config.yaml", "value": "'"$(echo "$ORIGINAL_CONFIG" | sed 's/"/\\"/g')"'"}]'
+        -p='[{"op": "replace", "path": "/data/config.yaml", "value": "'"$RESTORE_ESCAPED"'"}]'
 }
 
 @test "Cleanup: Delete cross-namespace test resources" {
