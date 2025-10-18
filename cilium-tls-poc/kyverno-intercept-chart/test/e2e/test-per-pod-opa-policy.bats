@@ -65,10 +65,10 @@ EOF
     kubectl wait --for=condition=ready pod/custom-policy-pod \
         -n kyverno-intercept --timeout=120s
 
-    # Verify the OPA sidecar has the environment variable set
-    log_info "Checking if OPA sidecar has OPA_POLICY_DATA env var..."
+    # Verify the opa-data-setup init container has the environment variable set
+    log_info "Checking if opa-data-setup init container has OPA_POLICY_DATA env var..."
     ENV_VAR=$(kubectl get pod custom-policy-pod -n kyverno-intercept \
-        -o jsonpath='{.spec.containers[?(@.name=="opa-sidecar")].env[?(@.name=="OPA_POLICY_DATA")].valueFrom.fieldRef.fieldPath}')
+        -o jsonpath='{.spec.initContainers[?(@.name=="opa-data-setup")].env[?(@.name=="OPA_POLICY_DATA")].valueFrom.fieldRef.fieldPath}')
 
     log_info "OPA_POLICY_DATA env var configured from: $ENV_VAR"
     [ "$ENV_VAR" = "metadata.annotations['intercept-proxy/opa-data']" ]
@@ -128,12 +128,12 @@ EOF
 @test "OPA logs show it loaded data from annotation" {
     log_info "Checking OPA sidecar logs to verify annotation data was used..."
 
-    # Check OPA sidecar logs
-    run kubectl logs custom-policy-pod -n kyverno-intercept -c opa-sidecar
+    # Check opa-data-setup init container logs
+    run kubectl logs custom-policy-pod -n kyverno-intercept -c opa-data-setup
 
     [ "$status" -eq 0 ]
 
-    log_info "OPA sidecar logs: $output"
+    log_info "opa-data-setup init container logs: $output"
 
     # Should show it used custom data from annotation
     [[ "$output" =~ "Using custom OPA policy data from annotation" ]]
