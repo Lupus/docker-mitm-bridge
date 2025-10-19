@@ -191,72 +191,19 @@ spec:
               set -e
               echo "Setting up OPA policy data..."
 
-              # Function to convert simple YAML lists to JSON using awk
-              yaml_to_json() {
-                awk '
-                BEGIN {
-                  print "{"
-                  first_section = 1
-                  in_section = 0
-                }
-                /^[a-z_]+:/ {
-                  # New section
-                  if (in_section) {
-                    # Close previous section
-                    print "\n  ],"
-                  }
-                  section = $1
-                  gsub(/:/, "", section)
-                  if (first_section) {
-                    first_section = 0
-                  }
-                  printf "  \"%s\": [", section
-                  first_item = 1
-                  in_section = 1
-                  next
-                }
-                /^  - / {
-                  # List item
-                  item = $0
-                  gsub(/^  - /, "", item)
-                  if (!first_item) printf ","
-                  first_item = 0
-                  printf "\n    \"%s\"", item
-                  next
-                }
-                END {
-                  if (in_section) {
-                    # Close last section
-                    print "\n  ]"
-                  }
-                  print "}"
-                }' "$1"
-              }
-
               # Check if custom OPA data is provided via annotation
               if [ -n "$OPA_POLICY_DATA" ]; then
                 echo "Using custom OPA policy data from annotation"
-                echo "Converting YAML to JSON format for OPA..."
-                echo "$OPA_POLICY_DATA" > /tmp/data.yml
-                yaml_to_json /tmp/data.yml > /opa-data/data.json
-                if [ $? -ne 0 ]; then
-                  echo "Failed to convert annotation data to JSON"
-                  exit 1
-                fi
+                echo "$OPA_POLICY_DATA" > /opa-data/data.yaml
               else
                 echo "Using default OPA policy data from ConfigMap"
-                echo "Converting YAML to JSON format for OPA..."
-                yaml_to_json /policies-default/data.yml > /opa-data/data.json
-                if [ $? -ne 0 ]; then
-                  echo "Failed to convert default data to JSON"
-                  exit 1
-                fi
+                cp /policies-default/data.yml /opa-data/data.yaml
               fi
 
-              echo "OPA data file prepared at /opa-data/data.json"
+              echo "OPA data file prepared at /opa-data/data.yaml"
               ls -la /opa-data/
-              echo "Data file contents preview:"
-              head -20 /opa-data/data.json || true
+              echo "Data file contents:"
+              cat /opa-data/data.yaml
             volumeMounts:
             - name: opa-data
               mountPath: /opa-data
@@ -340,7 +287,7 @@ spec:
             - "--addr=0.0.0.0:{{ .Values.opa.port }}"
             - "--config-file=/config/config.yaml"
             - "/policies/policy.rego"
-            - "/opa-data/data.json"  # Load JSON file (prepared by init container)
+            - "/opa-data/data.yaml"  # Load YAML file (OPA supports YAML natively)
             ports:
             - name: opa
               containerPort: {{ .Values.opa.port }}
