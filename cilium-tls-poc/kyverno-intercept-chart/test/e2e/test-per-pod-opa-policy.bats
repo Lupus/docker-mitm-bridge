@@ -28,7 +28,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
 }
 
 # Test that pods with annotation have env var set
-@test "Pod with annotation has OPA_POLICY_DATA environment variable" {
+@test "Pod with annotation has podinfo downwardAPI volume for OPA data" {
     # Create a test pod with custom OPA data annotation
     kubectl apply -n kyverno-intercept -f - <<EOF
 apiVersion: v1
@@ -65,13 +65,20 @@ EOF
     kubectl wait --for=condition=ready pod/custom-policy-pod \
         -n kyverno-intercept --timeout=120s
 
-    # Verify the opa-data-setup init container has the environment variable set
-    log_info "Checking if opa-data-setup init container has OPA_POLICY_DATA env var..."
-    ENV_VAR=$(kubectl get pod custom-policy-pod -n kyverno-intercept \
-        -o jsonpath='{.spec.initContainers[?(@.name=="opa-data-setup")].env[?(@.name=="OPA_POLICY_DATA")].valueFrom.fieldRef.fieldPath}')
+    # Verify the opa-data-setup init container has the podinfo volume mounted
+    log_info "Checking if opa-data-setup init container has podinfo volume mount..."
+    VOLUME_MOUNT=$(kubectl get pod custom-policy-pod -n kyverno-intercept \
+        -o jsonpath='{.spec.initContainers[?(@.name=="opa-data-setup")].volumeMounts[?(@.name=="podinfo")].mountPath}')
 
-    log_info "OPA_POLICY_DATA env var configured from: $ENV_VAR"
-    [ "$ENV_VAR" = "metadata.annotations['intercept-proxy/opa-data']" ]
+    log_info "podinfo volume mounted at: $VOLUME_MOUNT"
+    [ "$VOLUME_MOUNT" = "/podinfo" ]
+
+    # Verify the podinfo volume uses downwardAPI with the annotation
+    DOWNWARD_API_PATH=$(kubectl get pod custom-policy-pod -n kyverno-intercept \
+        -o jsonpath='{.spec.volumes[?(@.name=="podinfo")].downwardAPI.items[0].fieldRef.fieldPath}')
+
+    log_info "downwardAPI configured from: $DOWNWARD_API_PATH"
+    [ "$DOWNWARD_API_PATH" = "metadata.annotations['intercept-proxy/opa-data']" ]
 }
 
 @test "Pod with custom annotation still uses default ConfigMap for policy" {
