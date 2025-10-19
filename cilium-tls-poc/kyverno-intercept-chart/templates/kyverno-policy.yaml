@@ -187,7 +187,7 @@ spec:
               echo "Setting up OPA policy data..."
 
               # Check if custom OPA data is provided via annotation (downwardAPI volume)
-              if [ -f /podinfo/opa-data ]; then
+              if [ -f /podinfo/opa-data ] && [ -s /podinfo/opa-data ]; then
                 echo "Using custom OPA policy data from annotation"
                 cp /podinfo/opa-data /opa-data/data.yaml
               else
