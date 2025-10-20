@@ -160,7 +160,7 @@ jobs:
           echo "=== Pod Descriptions ==="
           kubectl describe pods -n kyverno-intercept
 
-          echo "=== Test Pod Logs ==="
+          echo "=== Test Pod Logs (test-app) ==="
           POD_NAME=$(kubectl get pod -l app=test-app -n kyverno-intercept -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "not-found")
           if [ "$POD_NAME" != "not-found" ]; then
             echo "--- Init Container: proxy-init ---"
@@ -180,6 +180,40 @@ jobs:
 
             echo "--- App Container Logs ---"
             kubectl logs -n kyverno-intercept "$POD_NAME" -c test-container --tail=100 || true
+          fi
+
+          echo "=== Custom Policy Pod Logs (custom-policy-pod) ==="
+          CUSTOM_POD=$(kubectl get pod -l app=custom-policy-test -n kyverno-intercept -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "not-found")
+          if [ "$CUSTOM_POD" != "not-found" ]; then
+            echo "Pod name: $CUSTOM_POD"
+
+            echo "--- Init Container: opa-data-setup ---"
+            kubectl logs -n kyverno-intercept "$CUSTOM_POD" -c opa-data-setup || true
+
+            echo "--- Envoy Logs ---"
+            kubectl logs -n kyverno-intercept "$CUSTOM_POD" -c envoy-proxy --tail=100 || true
+
+            echo "--- OPA Logs ---"
+            kubectl logs -n kyverno-intercept "$CUSTOM_POD" -c opa-sidecar --tail=100 || true
+
+            echo "--- xDS Logs ---"
+            kubectl logs -n kyverno-intercept "$CUSTOM_POD" -c xds-service --tail=100 || true
+
+            echo "--- App Container Logs ---"
+            kubectl logs -n kyverno-intercept "$CUSTOM_POD" -c test-container --tail=100 || true
+          fi
+
+          echo "=== Custom Policy Pod 2 Logs (custom-policy-pod-2) ==="
+          CUSTOM_POD2=$(kubectl get pod custom-policy-pod-2 -n kyverno-intercept -o name 2>/dev/null || echo "not-found")
+          if [ "$CUSTOM_POD2" != "not-found" ]; then
+            echo "--- OPA Data Setup Init ---"
+            kubectl logs -n kyverno-intercept custom-policy-pod-2 -c opa-data-setup || true
+
+            echo "--- Envoy Logs ---"
+            kubectl logs -n kyverno-intercept custom-policy-pod-2 -c envoy-proxy --tail=100 || true
+
+            echo "--- OPA Logs ---"
+            kubectl logs -n kyverno-intercept custom-policy-pod-2 -c opa-sidecar --tail=100 || true
           fi
 
           echo "=== Kyverno Logs ==="

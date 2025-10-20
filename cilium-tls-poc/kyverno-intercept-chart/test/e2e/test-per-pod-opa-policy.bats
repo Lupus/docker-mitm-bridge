@@ -94,7 +94,8 @@ EOF
 
 @test "OPA in custom pod enforces custom policy from annotation" {
     # Wait for OPA to be ready and load the annotation data
-    sleep 10
+    # Increased from 10s to 20s to ensure proxy stack is fully ready
+    sleep 20
 
     log_info "Testing that custom OPA policy data is enforced..."
 
@@ -119,8 +120,9 @@ EOF
 @test "OPA can query custom data from annotation" {
     log_info "Querying OPA data endpoint to verify custom data is loaded..."
 
-    # Query OPA's data endpoint to see what data it has loaded
-    run exec_in_pod "custom-policy-pod" "opa-sidecar" \
+    # Query OPA's data endpoint from test-container (opa-sidecar is distroless, no shell)
+    # OPA listens on localhost:15020, accessible from any container in the pod
+    run exec_in_pod "custom-policy-pod" "test-container" \
         "curl -s http://localhost:15020/v1/data"
 
     [ "$status" -eq 0 ]
@@ -180,7 +182,8 @@ EOF
     kubectl wait --for=condition=ready pod/custom-policy-pod-2 \
         -n kyverno-intercept --timeout=120s
 
-    sleep 10
+    # Increased wait time to ensure both pods' proxy stacks are fully ready
+    sleep 20
 
     # Test first pod: httpbin.org allowed, github.com blocked
     run exec_in_pod "custom-policy-pod" "test-container" \
