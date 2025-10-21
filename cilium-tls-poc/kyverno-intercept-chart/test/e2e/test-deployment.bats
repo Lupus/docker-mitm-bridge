@@ -79,7 +79,7 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     [ "$APP_UID" -eq 12345 ]
 }
 
-@test "Init container completed successfully" {
+@test "Init containers completed successfully" {
     POD_NAME=$(get_pod_name "test-app")
 
     # Check proxy-init completed
@@ -91,6 +91,15 @@ DETIK_CLIENT_NAMESPACE="kyverno-intercept"
     [[ "$INIT_LOGS" =~ "Init container completed successfully" ]]
     [[ "$INIT_LOGS" =~ "NAT table" ]]
     [[ "$INIT_LOGS" =~ "FILTER table" ]]
+
+    # Check opa-data-setup completed
+    run check_init_container "$POD_NAME" "opa-data-setup"
+    [ "$status" -eq 0 ]
+
+    # Verify OPA data was set up (check logs)
+    OPA_INIT_LOGS=$(get_container_logs "$POD_NAME" "opa-data-setup")
+    [[ "$OPA_INIT_LOGS" =~ "Setting up OPA policy data" ]]
+    [[ "$OPA_INIT_LOGS" =~ "OPA data file prepared" ]]
 }
 
 @test "CA certificate is mounted in app container" {

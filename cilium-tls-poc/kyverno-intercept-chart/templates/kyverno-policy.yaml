@@ -161,6 +161,63 @@ spec:
             - name: ca-certificates
               mountPath: /shared-ca-certs
 
+  {{- if .Values.opa.enabled }}
+  # Inject OPA data setup init container as a separate rule
+  - name: inject-opa-init-container
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          initContainers:
+          - name: opa-data-setup
+            image: {{ .Values.initContainer.image }}  # Use same image as proxy-init (has shell)
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Setting up OPA policy data..."
+
+              # Check if custom OPA data is provided via annotation (downwardAPI volume)
+              if [ -f /podinfo/opa-data ] && [ -s /podinfo/opa-data ]; then
+                echo "Using custom OPA policy data from annotation"
+                cp /podinfo/opa-data /opa-data/data.yaml
+              else
+                echo "Using default OPA policy data from ConfigMap"
+                cp /policies-default/data.yml /opa-data/data.yaml
+              fi
+
+              echo "OPA data file prepared at /opa-data/data.yaml"
+              ls -la /opa-data/
+              echo "Data file contents:"
+              cat /opa-data/data.yaml
+            volumeMounts:
+            - name: opa-data
+              mountPath: /opa-data
+            - name: opa-policy
+              mountPath: /policies-default
+              readOnly: true
+            - name: podinfo
+              mountPath: /podinfo
+              readOnly: true
+            securityContext:
+              runAsUser: {{ .Values.opa.uid }}
+              runAsGroup: {{ .Values.opa.gid }}
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+  {{- end }}
+
   # Inject Envoy sidecar
   - name: inject-envoy-sidecar
     match:
@@ -228,7 +285,7 @@ spec:
             - "--addr=0.0.0.0:{{ .Values.opa.port }}"
             - "--config-file=/config/config.yaml"
             - "/policies/policy.rego"
-            - "/policies/data.yml"
+            - "/opa-data/data.yaml"  # Load YAML file (OPA supports YAML natively)
             ports:
             - name: opa
               containerPort: {{ .Values.opa.port }}
@@ -252,6 +309,9 @@ spec:
               readOnly: true
             - name: opa-config
               mountPath: /config
+              readOnly: true
+            - name: opa-data
+              mountPath: /opa-data
               readOnly: true
             livenessProbe:
               httpGet:
@@ -318,9 +378,8 @@ spec:
               periodSeconds: 5
           {{- end }}
 
-  {{- if .Values.opa.enabled }}
-  # Generate per-pod OPA policy ConfigMap based on annotation
-  - name: generate-opa-policy-configmap
+  # Inject volumes
+  - name: inject-volumes
     match:
       any:
       - resources:
@@ -329,76 +388,6 @@ spec:
           selector:
             matchLabels:
               "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
-    preconditions:
-      all:
-      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
-        operator: NotEquals
-        value: ""
-    generate:
-      apiVersion: v1
-      kind: ConfigMap
-      name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
-      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
-      synchronize: true
-      data:
-        policy.rego: {{ .Files.Get "policies/policy.rego" | quote }}
-        data.yml: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" }}` }}"
-  {{- end }}
-
-  # Inject volumes (for pods WITH custom opa-data annotation)
-  - name: inject-volumes-custom-opa
-    match:
-      any:
-      - resources:
-          kinds:
-          - Pod
-          selector:
-            matchLabels:
-              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
-    preconditions:
-      all:
-      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
-        operator: NotEquals
-        value: ""
-    mutate:
-      patchStrategicMerge:
-        spec:
-          volumes:
-          - name: ca-secret
-            emptyDir: {}  # xDS service generates CA at runtime and writes it here
-          - name: ca-certificates
-            emptyDir: {}
-          - name: ca-certificates-system
-            hostPath:
-              path: /etc/ssl/certs
-              type: Directory
-          - name: envoy-config
-            configMap:
-              name: {{ .Release.Name }}-envoy-config
-          {{- if .Values.opa.enabled }}
-          - name: opa-policy
-            configMap:
-              name: "{{ `{{ request.object.metadata.name }}` }}-opa-policy"
-          - name: opa-config
-            configMap:
-              name: {{ .Release.Name }}-opa-config
-          {{- end }}
-
-  # Inject volumes (for pods WITHOUT custom opa-data annotation - use default)
-  - name: inject-volumes-default-opa
-    match:
-      any:
-      - resources:
-          kinds:
-          - Pod
-          selector:
-            matchLabels:
-              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
-    preconditions:
-      all:
-      - key: "{{ `{{ request.object.metadata.annotations.\"intercept-proxy/opa-data\" || '' }}` }}"
-        operator: Equals
-        value: ""
     mutate:
       patchStrategicMerge:
         spec:
@@ -421,6 +410,15 @@ spec:
           - name: opa-config
             configMap:
               name: {{ .Release.Name }}-opa-config
+          - name: opa-data
+            emptyDir: {}  # Shared volume for init container to prepare data for OPA
+          - name: podinfo
+            downwardAPI:
+              items:
+              - path: "opa-data"
+                fieldRef:
+                  fieldPath: metadata.annotations['intercept-proxy/opa-data']
+              defaultMode: 0444
           {{- end }}
 
   # Inject CA certificates into all containers (except sidecars)

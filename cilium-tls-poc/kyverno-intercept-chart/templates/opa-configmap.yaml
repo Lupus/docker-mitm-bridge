@@ -22,7 +22,7 @@ data:
 
     plugins:
       envoy_ext_authz_grpc:
-        addr: :{{ .Values.opa.grpcPort }}
+        addr: ":{{ .Values.opa.grpcPort }}"
         path: intercept/allow
         dry_run: false
         enable_reflection: true
