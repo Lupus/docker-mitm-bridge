@@ -370,17 +370,27 @@ spec:
 
 #### How It Works
 
-1. **ConfigMap Generation**: When a pod with the `intercept-proxy/opa-data` annotation is created, Kyverno automatically generates a unique ConfigMap named `{pod-name}-opa-policy` containing:
-   - The standard `policy.rego` rules (from the chart)
-   - Custom `data.yml` from the annotation
+The per-pod OPA policy feature uses Kubernetes **downwardAPI volumes** to pass annotation data to containers:
 
-2. **Automatic Mounting**: The pod is automatically configured to mount this per-pod ConfigMap instead of the default one
+1. **Annotation to Volume**: When a pod with the `intercept-proxy/opa-data` annotation is created, Kyverno injects a downwardAPI volume (`podinfo`) that exposes the annotation content as a file at `/podinfo/opa-data`
 
-3. **Lifecycle Management**: The ConfigMap is automatically cleaned up when the pod is deleted (Kyverno handles this via `synchronize: true`)
+2. **Init Container Preparation**: An init container (`opa-data-setup`) runs before OPA starts:
+   - Checks if `/podinfo/opa-data` exists and is non-empty
+   - If yes: copies the custom annotation data to `/opa-data/data.yaml`
+   - If no: copies the default data from the shared ConfigMap to `/opa-data/data.yaml`
+
+3. **OPA Sidecar Startup**: The OPA sidecar loads policy data from `/opa-data/data.yaml` at startup
+   - Policy rules (`policy.rego`) are loaded from the shared ConfigMap (same for all pods)
+   - Policy data varies per pod based on annotations
+
+4. **Runtime**: Each pod's OPA instance enforces its own custom policy data independently
+
+**Why downwardAPI volumes instead of environment variables?**
+Kubernetes Downward API does not properly handle multiline annotation values when exposed as environment variables. Volumes handle multiline YAML content correctly.
 
 #### Updating Policies
 
-⚠️ **Important**: Due to standard Kubernetes behavior, **running pods won't pick up policy changes without a restart**. ConfigMap volume mounts are cached by kubelet.
+⚠️ **Important**: Policy data is loaded when the pod starts (via init container). **Running pods won't pick up annotation changes without a restart**.
 
 **To update a policy:**
 
@@ -389,11 +399,11 @@ spec:
 # 1. Update the annotation in your deployment manifest
 kubectl apply -f deployment.yaml
 
-# 2. Trigger a rolling update (if annotation change doesn't trigger one)
+# 2. Trigger a rolling update
 kubectl rollout restart deployment/my-app -n my-namespace
 
 # For individual Pods
-# 1. Delete and recreate the pod
+# Delete and recreate the pod with updated annotation
 kubectl delete pod my-pod -n my-namespace
 kubectl apply -f pod.yaml
 ```
@@ -466,13 +476,54 @@ metadata:
         - "api.openai.com"
 ```
 
-Each pod gets its own ConfigMap with its specific policy, and they operate independently.
+Each pod's OPA instance loads its own data from the annotation (via downwardAPI volume), and they operate independently. No per-pod ConfigMaps are created.
 
 #### Fallback Behavior
 
 - Pods **WITH** the `intercept-proxy/opa-data` annotation use their custom policy
 - Pods **WITHOUT** the annotation use the default policy from Helm `values.yaml`
 - This ensures backward compatibility with existing deployments
+
+#### Troubleshooting Per-Pod Policies
+
+**Verify which policy data is being used:**
+
+```bash
+# Check init container logs to see which data source was used
+kubectl logs <pod-name> -c opa-data-setup -n <namespace>
+
+# You should see one of:
+# "Using custom OPA policy data from annotation"
+# "Using default OPA policy data from ConfigMap"
+```
+
+**Query OPA data endpoint to verify loaded data:**
+
+```bash
+# Query OPA's data endpoint (returns all loaded data)
+kubectl exec <pod-name> -c test-container -n <namespace> -- \
+  curl -s http://localhost:15020/v1/data
+
+# Check specific domains in policy data
+kubectl exec <pod-name> -c test-container -n <namespace> -- \
+  curl -s http://localhost:15020/v1/data/unrestricted_domains
+```
+
+**Check OPA decision logs:**
+
+```bash
+# View OPA sidecar logs to see policy decisions
+kubectl logs <pod-name> -c opa-sidecar -n <namespace> | tail -50
+
+# Look for decision log entries showing allow/deny decisions
+```
+
+**Common Issues:**
+
+1. **Invalid YAML in annotation** - Init container will fail with YAML parse error. Check init container logs.
+2. **Empty annotation** - Pod will use default ConfigMap data (check init container logs for confirmation).
+3. **Policy not updating** - Pods must be restarted to load new annotation data. Use `kubectl rollout restart` for Deployments.
+4. **Annotation too large** - Kubernetes annotations have a 256KB limit. If exceeded, pod creation will fail with error.
 
 ## Configuration Reference
 
