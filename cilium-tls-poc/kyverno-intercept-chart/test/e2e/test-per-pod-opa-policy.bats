@@ -109,8 +109,9 @@ EOF
     log_info "httpbin.org access allowed (custom policy data)"
 
     # github.com should be blocked (not in our custom allowed/unrestricted domains, and github_read_access_enabled: false)
+    # Use -k to skip cert verification (expected cert name mismatch for blocked domains)
     run exec_in_pod "custom-policy-pod" "test-container" \
-        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
+        "curl -k -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
 
     [ "$status" -eq 0 ]
     [ "$output" = "403" ]
@@ -192,8 +193,9 @@ EOF
     [[ ! "$output" = "403" ]]
     log_info "Pod 1: httpbin.org allowed"
 
+    # Use -k to skip cert verification (github.com not in custom policy, gets blocked.local cert)
     run exec_in_pod "custom-policy-pod" "test-container" \
-        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
+        "curl -k -s -o /dev/null -w '%{http_code}' --max-time 15 https://github.com"
     [ "$status" -eq 0 ]
     [ "$output" = "403" ]
     log_info "Pod 1: github.com blocked"
@@ -205,8 +207,9 @@ EOF
     [[ ! "$output" = "403" ]]
     log_info "Pod 2: github.com allowed"
 
+    # Use -k to skip cert verification (httpbin.org not in pod-2's policy, gets blocked.local cert)
     run exec_in_pod "custom-policy-pod-2" "test-container" \
-        "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://httpbin.org/get"
+        "curl -k -s -o /dev/null -w '%{http_code}' --max-time 15 https://httpbin.org/get"
     [ "$status" -eq 0 ]
     [ "$output" = "403" ]
     log_info "Pod 2: httpbin.org blocked"
