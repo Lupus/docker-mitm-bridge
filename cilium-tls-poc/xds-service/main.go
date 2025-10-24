@@ -544,7 +544,7 @@ func (s *LDSServer) buildHTTPListener() (*anypb.Any, error) {
 								Action: &route.Route_Route{
 									Route: &route.RouteAction{
 										ClusterSpecifier: &route.RouteAction_Cluster{
-											Cluster: "dynamic_forward_proxy_cluster",
+											Cluster: "dynamic_forward_proxy_cluster_http",
 										},
 									},
 								},
@@ -568,7 +568,7 @@ func (s *LDSServer) buildHTTPListener() (*anypb.Any, error) {
 						dfpFilterConfig := &dynamic_forward_proxy.FilterConfig{
 							ImplementationSpecifier: &dynamic_forward_proxy.FilterConfig_DnsCacheConfig{
 								DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
-									Name:            "dynamic_forward_proxy_cache_config",
+									Name:            "dynamic_forward_proxy_cache_config_http",
 									DnsLookupFamily: cluster.Cluster_V4_ONLY,
 									MaxHosts:        wrapperspb.UInt32(100),
 								},
@@ -696,7 +696,7 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 									Action: &route.Route_Route{
 										Route: &route.RouteAction{
 											ClusterSpecifier: &route.RouteAction_Cluster{
-												Cluster: "dynamic_forward_proxy_cluster",
+												Cluster: "dynamic_forward_proxy_cluster_https",
 											},
 										},
 									},
@@ -720,7 +720,7 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 							dfpFilterConfig := &dynamic_forward_proxy.FilterConfig{
 								ImplementationSpecifier: &dynamic_forward_proxy.FilterConfig_DnsCacheConfig{
 									DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
-										Name:            "dynamic_forward_proxy_cache_config",
+										Name:            "dynamic_forward_proxy_cache_config_https",
 										DnsLookupFamily: cluster.Cluster_V4_ONLY,
 										MaxHosts:        wrapperspb.UInt32(100),
 									},
@@ -855,7 +855,7 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 								Action: &route.Route_Route{
 									Route: &route.RouteAction{
 										ClusterSpecifier: &route.RouteAction_Cluster{
-											Cluster: "dynamic_forward_proxy_cluster",
+											Cluster: "dynamic_forward_proxy_cluster_https",
 										},
 									},
 								},
@@ -880,7 +880,7 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 						dfpFilterConfig := &dynamic_forward_proxy.FilterConfig{
 							ImplementationSpecifier: &dynamic_forward_proxy.FilterConfig_DnsCacheConfig{
 								DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
-									Name:            "dynamic_forward_proxy_cache_config",
+									Name:            "dynamic_forward_proxy_cache_config_https",
 									DnsLookupFamily: cluster.Cluster_V4_ONLY,
 									MaxHosts:        wrapperspb.UInt32(100),
 								},
@@ -1157,9 +1157,9 @@ func (s *CDSServer) buildClusters() error {
 	}
 	clusters = append(clusters, extAuthzAny)
 
-	// 2. dynamic_forward_proxy_cluster - for upstream connections
-	dynamicForwardProxyCluster := &cluster.Cluster{
-		Name:           "dynamic_forward_proxy_cluster",
+	// 2. dynamic_forward_proxy_cluster_http - for plain HTTP upstream connections (no TLS)
+	dynamicForwardProxyClusterHTTP := &cluster.Cluster{
+		Name:           "dynamic_forward_proxy_cluster_http",
 		ConnectTimeout: durationpb.New(10 * time.Second),
 		LbPolicy:       cluster.Cluster_CLUSTER_PROVIDED,
 		ClusterDiscoveryType: &cluster.Cluster_ClusterType{
@@ -1170,7 +1170,40 @@ func (s *CDSServer) buildClusters() error {
 					dfpClusterConfig := &dynamic_forward_proxy_cluster.ClusterConfig{
 						ClusterImplementationSpecifier: &dynamic_forward_proxy_cluster.ClusterConfig_DnsCacheConfig{
 							DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
-								Name:            "dynamic_forward_proxy_cache_config",
+								Name:            "dynamic_forward_proxy_cache_config_http",
+								DnsLookupFamily: cluster.Cluster_V4_ONLY,
+								MaxHosts:        wrapperspb.UInt32(100),
+							},
+						},
+					}
+					any, _ := anypb.New(dfpClusterConfig)
+					return any
+				}(),
+			},
+		},
+		// No TransportSocket - plain HTTP connections
+	}
+
+	dynamicForwardProxyHTTPAny, err := anypb.New(dynamicForwardProxyClusterHTTP)
+	if err != nil {
+		return fmt.Errorf("failed to marshal dynamic_forward_proxy_cluster_http: %w", err)
+	}
+	clusters = append(clusters, dynamicForwardProxyHTTPAny)
+
+	// 3. dynamic_forward_proxy_cluster_https - for HTTPS upstream connections (with TLS)
+	dynamicForwardProxyClusterHTTPS := &cluster.Cluster{
+		Name:           "dynamic_forward_proxy_cluster_https",
+		ConnectTimeout: durationpb.New(10 * time.Second),
+		LbPolicy:       cluster.Cluster_CLUSTER_PROVIDED,
+		ClusterDiscoveryType: &cluster.Cluster_ClusterType{
+			ClusterType: &cluster.Cluster_CustomClusterType{
+				Name: "envoy.clusters.dynamic_forward_proxy",
+				TypedConfig: func() *anypb.Any {
+					// Properly wrap DnsCacheConfig in ClusterConfig
+					dfpClusterConfig := &dynamic_forward_proxy_cluster.ClusterConfig{
+						ClusterImplementationSpecifier: &dynamic_forward_proxy_cluster.ClusterConfig_DnsCacheConfig{
+							DnsCacheConfig: &dynamic_forward_proxy_common.DnsCacheConfig{
+								Name:            "dynamic_forward_proxy_cache_config_https",
 								DnsLookupFamily: cluster.Cluster_V4_ONLY,
 								MaxHosts:        wrapperspb.UInt32(100),
 							},
@@ -1206,11 +1239,11 @@ func (s *CDSServer) buildClusters() error {
 		},
 	}
 
-	dynamicForwardProxyAny, err := anypb.New(dynamicForwardProxyCluster)
+	dynamicForwardProxyHTTPSAny, err := anypb.New(dynamicForwardProxyClusterHTTPS)
 	if err != nil {
-		return fmt.Errorf("failed to marshal dynamic_forward_proxy_cluster: %w", err)
+		return fmt.Errorf("failed to marshal dynamic_forward_proxy_cluster_https: %w", err)
 	}
-	clusters = append(clusters, dynamicForwardProxyAny)
+	clusters = append(clusters, dynamicForwardProxyHTTPSAny)
 
 	s.clusterCache = clusters
 	log.Printf("Cluster configuration built with %d clusters", len(clusters))

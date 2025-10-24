@@ -112,6 +112,8 @@ opa:
     unrestrictedDomains:
       - api.anthropic.com
       - api.openai.com
+      - http-server  # Test HTTP server for cluster separation tests
+      - http-server.kyverno-intercept.svc.cluster.local
 
     # GitHub-specific configuration
     githubReadAccessEnabled: true
