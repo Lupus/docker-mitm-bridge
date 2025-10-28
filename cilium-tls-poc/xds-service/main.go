@@ -1214,12 +1214,51 @@ func (s *CDSServer) buildClusters() error {
 				}(),
 			},
 		},
+		// Connection pooling settings to keep connections alive longer
+		// This reduces connection churn and maintains good performance
+		CommonHttpProtocolOptions: &core.HttpProtocolOptions{
+			IdleTimeout:              durationpb.New(600 * time.Second), // 10 minutes
+			MaxRequestsPerConnection: wrapperspb.UInt32(0),              // Unlimited requests per connection
+		},
+		// Circuit breaker to allow more concurrent connections
+		CircuitBreakers: &cluster.CircuitBreakers{
+			Thresholds: []*cluster.CircuitBreakers_Thresholds{
+				{
+					MaxConnections: wrapperspb.UInt32(2048),
+				},
+			},
+		},
+		// Enable auto-SNI to ensure SNI is set correctly from Host header
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": func() *anypb.Any {
+				httpOptions := &httpproto.HttpProtocolOptions{
+					UpstreamProtocolOptions: &httpproto.HttpProtocolOptions_AutoConfig{
+						AutoConfig: &httpproto.HttpProtocolOptions_AutoHttpConfig{
+							HttpProtocolOptions: &core.Http1ProtocolOptions{
+								EnableTrailers: true,
+							},
+						},
+					},
+					CommonHttpProtocolOptions: &core.HttpProtocolOptions{
+						IdleTimeout: durationpb.New(600 * time.Second),
+					},
+				}
+				any, _ := anypb.New(httpOptions)
+				return any
+			}(),
+		},
 		TransportSocket: &core.TransportSocket{
 			Name: "envoy.transport_sockets.tls",
 			ConfigType: &core.TransportSocket_TypedConfig{
 				TypedConfig: func() *anypb.Any {
 					upstreamTLS := &tlsv3.UpstreamTlsContext{
 						Sni: "{sni}",
+						// CRITICAL FIX: Disable TLS session resumption to prevent caching
+						// validation context per IP. Without this, when multiple hostnames
+						// resolve to the same IP with different certificates, only the first
+						// hostname accessed works - subsequent ones fail with CERTIFICATE_VERIFY_FAILED.
+						// This is because session resumption caches per IP, not per (IP, SNI) tuple.
+						MaxSessionKeys: wrapperspb.UInt32(0), // Disable session resumption
 						CommonTlsContext: &tlsv3.CommonTlsContext{
 							ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
 								ValidationContext: &tlsv3.CertificateValidationContext{

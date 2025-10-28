@@ -1,0 +1,193 @@
+---
+# Test CA Secret - Used by Envoy to trust test certificates
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-ca-cert
+  namespace: kyverno-intercept
+type: Opaque
+data:
+  ca.crt: ""  # Will be populated by test script
+---
+# Server certificate for test-a.local
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-a-tls
+  namespace: kyverno-intercept
+type: kubernetes.io/tls
+data:
+  tls.crt: ""  # Will be populated by test script
+  tls.key: ""  # Will be populated by test script
+---
+# Server certificate for test-b.local
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-b-tls
+  namespace: kyverno-intercept
+type: kubernetes.io/tls
+data:
+  tls.crt: ""  # Will be populated by test script
+  tls.key: ""  # Will be populated by test script
+---
+# Nginx ConfigMap with SNI virtual servers
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-nginx-config
+  namespace: kyverno-intercept
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$ssl_server_name"';
+
+        access_log /var/log/nginx/access.log main;
+
+        sendfile on;
+        keepalive_timeout 65;
+
+        # Virtual server for test-a.local
+        server {
+            listen 443 ssl;
+            server_name test-a.local;
+
+            ssl_certificate /certs/test-a/tls.crt;
+            ssl_certificate_key /certs/test-a/tls.key;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_ciphers HIGH:!aNULL:!MD5;
+
+            location / {
+                return 200 "Response from test-a.local (certificate CN=test-a.local)\n";
+                add_header Content-Type text/plain;
+            }
+
+            location /health {
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+
+        # Virtual server for test-b.local
+        server {
+            listen 443 ssl;
+            server_name test-b.local;
+
+            ssl_certificate /certs/test-b/tls.crt;
+            ssl_certificate_key /certs/test-b/tls.key;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_ciphers HIGH:!aNULL:!MD5;
+
+            location / {
+                return 200 "Response from test-b.local (certificate CN=test-b.local)\n";
+                add_header Content-Type text/plain;
+            }
+
+            location /health {
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+
+        # Default server (fallback)
+        server {
+            listen 443 ssl default_server;
+            server_name _;
+
+            ssl_certificate /certs/test-a/tls.crt;
+            ssl_certificate_key /certs/test-a/tls.key;
+
+            location / {
+                return 400 "SNI hostname not recognized\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }
+---
+# Nginx Deployment with multi-SNI configuration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-nginx-multi-sni
+  namespace: kyverno-intercept
+  labels:
+    app: test-nginx-multi-sni
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-nginx-multi-sni
+  template:
+    metadata:
+      labels:
+        app: test-nginx-multi-sni
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 443
+          name: https
+          protocol: TCP
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: test-a-certs
+          mountPath: /certs/test-a
+          readOnly: true
+        - name: test-b-certs
+          mountPath: /certs/test-b
+          readOnly: true
+        livenessProbe:
+          tcpSocket:
+            port: 443
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 443
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: test-nginx-config
+      - name: test-a-certs
+        secret:
+          secretName: test-a-tls
+      - name: test-b-certs
+        secret:
+          secretName: test-b-tls
+---
+# Service exposing nginx (single IP for both hostnames)
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-nginx-multi-sni
+  namespace: kyverno-intercept
+  labels:
+    app: test-nginx-multi-sni
+spec:
+  type: ClusterIP
+  ports:
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  selector:
+    app: test-nginx-multi-sni
