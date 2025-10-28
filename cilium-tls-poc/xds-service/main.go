@@ -1208,6 +1208,11 @@ func (s *CDSServer) buildClusters() error {
 								MaxHosts:        wrapperspb.UInt32(100),
 							},
 						},
+						// REQUIRED: auto_sni and auto_san_validation must be set for dynamic_forward_proxy
+						// auto_sni: Automatically set SNI based on the requested host
+						// auto_san_validation: Automatically validate SAN against the requested host
+						AutoSni:            true,
+						AutoSanValidation:  true,
 					}
 					any, _ := anypb.New(dfpClusterConfig)
 					return any
