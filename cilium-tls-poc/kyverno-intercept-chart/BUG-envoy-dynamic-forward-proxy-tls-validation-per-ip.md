@@ -2,7 +2,7 @@
 
 **Status**: ✅ **FIXED**
 **Fixed Date**: 2025-10-28
-**Pull Request**: [To be added after PR creation]
+**Pull Request**: https://github.com/Lupus/docker-mitm-bridge/pull/11
 
 **Severity**: High
 **Component**: xDS Service / Envoy Dynamic Forward Proxy
