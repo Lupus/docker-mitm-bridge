@@ -1208,11 +1208,6 @@ func (s *CDSServer) buildClusters() error {
 								MaxHosts:        wrapperspb.UInt32(100),
 							},
 						},
-						// REQUIRED: auto_sni and auto_san_validation must be set for dynamic_forward_proxy
-						// auto_sni: Automatically set SNI based on the requested host
-						// auto_san_validation: Automatically validate SAN against the requested host
-						AutoSni:            true,
-						AutoSanValidation:  true,
 					}
 					any, _ := anypb.New(dfpClusterConfig)
 					return any
@@ -1233,10 +1228,16 @@ func (s *CDSServer) buildClusters() error {
 				},
 			},
 		},
-		// Enable auto-SNI to ensure SNI is set correctly from Host header
+		// REQUIRED: Configure auto_sni and auto_san_validation via HttpProtocolOptions
+		// This is required for dynamic_forward_proxy clusters to properly handle SNI and certificate validation
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": func() *anypb.Any {
 				httpOptions := &httpproto.HttpProtocolOptions{
+					// Enable auto SNI and SAN validation
+					UpstreamHttpProtocolOptions: &core.UpstreamHttpProtocolOptions{
+						AutoSni:           true, // Automatically set SNI from Host header
+						AutoSanValidation: true, // Automatically validate certificate SAN
+					},
 					UpstreamProtocolOptions: &httpproto.HttpProtocolOptions_AutoConfig{
 						AutoConfig: &httpproto.HttpProtocolOptions_AutoHttpConfig{
 							HttpProtocolOptions: &core.Http1ProtocolOptions{
