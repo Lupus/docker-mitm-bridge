@@ -156,6 +156,15 @@ jobs:
         run: |
           bats test/e2e/test-http-https-cluster-separation.bats
 
+      - name: Run E2E Tests - Multi-SNI Same IP (TLS Session Resumption Fix)
+        working-directory: cilium-tls-poc/kyverno-intercept-chart
+        env:
+          NAMESPACE: kyverno-intercept
+          CHART_NAME: intercept-proxy
+        run: |
+          chmod +x tests/test-multi-sni-same-ip.sh
+          tests/test-multi-sni-same-ip.sh
+
       - name: Debug - Show pod details on failure
         if: failure()
         run: |
