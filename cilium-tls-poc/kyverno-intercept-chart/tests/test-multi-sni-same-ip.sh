@@ -35,6 +35,7 @@ log_warn() {
 cleanup() {
     log_info "Cleaning up test resources..."
     kubectl delete pod test-client -n "$NAMESPACE" --ignore-not-found=true --wait=false || true
+    kubectl delete configmap test-ca-bundle -n "$NAMESPACE" --ignore-not-found=true || true
     kubectl delete -f "$SCRIPT_DIR/test-nginx-multi-sni.yaml" --ignore-not-found=true || true
     rm -rf "$SCRIPT_DIR/test-certs" || true
 }
@@ -89,24 +90,13 @@ SERVICE_IP=$(kubectl get service test-nginx-multi-sni -n "$NAMESPACE" -o jsonpat
 log_info "Service IP: $SERVICE_IP"
 echo
 
-# Step 4: Add test CA to the intercept-proxy CA bundle
-log_info "Step 4: Adding test CA to Envoy's trusted CA bundle..."
-# We need to append test CA to the existing CA Secret used by the chart
-EXISTING_CA=$(kubectl get secret "${CHART_NAME}-ca" -n "$NAMESPACE" -o jsonpath='{.data.tls\.crt}' | base64 -d)
-COMBINED_CA=$(cat <<EOF
-$EXISTING_CA
+# Step 4: Create ConfigMap with test CA for mounting in test pod
+log_info "Step 4: Creating ConfigMap with test CA..."
+kubectl create configmap test-ca-bundle -n "$NAMESPACE" \
+  --from-file=test-ca.crt="$SCRIPT_DIR/test-certs/test-ca.crt" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-# Test CA for multi-SNI testing
-$(cat "$SCRIPT_DIR/test-certs/test-ca.crt")
-EOF
-)
-COMBINED_CA_B64=$(echo "$COMBINED_CA" | base64 -w 0)
-
-# Update the CA Secret
-kubectl patch secret "${CHART_NAME}-ca" -n "$NAMESPACE" --type='json' \
-  -p="[{\"op\": \"replace\", \"path\": \"/data/tls.crt\", \"value\": \"$COMBINED_CA_B64\"}]"
-
-log_success "Test CA added to Envoy's trusted CA bundle"
+log_success "Test CA ConfigMap created"
 echo
 
 # Step 5: Deploy test client pod with interception
@@ -121,21 +111,77 @@ metadata:
     intercept-proxy/enabled: "true"
   annotations:
     intercept-proxy/opa-data: |
+      allowed_domains: []
       unrestricted_domains:
         - test-a.local
         - test-b.local
+      github_read_access_enabled: false
+      github_allowed_users: []
+      github_allowed_repos: []
+      aws_access_enabled: false
+      aws_allowed_services: []
 spec:
   securityContext:
     runAsUser: 12345
     runAsGroup: 12345
     fsGroup: 12345
-  containers:
-  - name: test
+  initContainers:
+  - name: setup-ca-and-hosts
     image: curlimages/curl:latest
-    command: ["sh", "-c", "echo '$SERVICE_IP test-a.local test-b.local' >> /etc/hosts && sleep 3600"]
+    command:
+    - sh
+    - -c
+    - |
+      # Add test CA to system CA bundle
+      cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
+      echo "" >> /shared-ca/ca-bundle.crt
+      cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
+
+      # Setup /etc/hosts for test domains
+      echo "$SERVICE_IP test-a.local test-b.local" > /shared-hosts/hosts-append
+    volumeMounts:
+    - name: shared-ca
+      mountPath: /shared-ca
+    - name: shared-hosts
+      mountPath: /shared-hosts
+    - name: test-ca
+      mountPath: /test-ca
+      readOnly: true
     securityContext:
       runAsUser: 12345
       runAsGroup: 12345
+  containers:
+  - name: test
+    image: curlimages/curl:latest
+    command:
+    - sh
+    - -c
+    - |
+      # Append custom hosts to /etc/hosts
+      cat /shared-hosts/hosts-append >> /etc/hosts
+      # Sleep to keep container running
+      sleep 3600
+    env:
+    - name: SSL_CERT_FILE
+      value: /shared-ca/ca-bundle.crt
+    volumeMounts:
+    - name: shared-ca
+      mountPath: /shared-ca
+      readOnly: true
+    - name: shared-hosts
+      mountPath: /shared-hosts
+      readOnly: true
+    securityContext:
+      runAsUser: 12345
+      runAsGroup: 12345
+  volumes:
+  - name: shared-ca
+    emptyDir: {}
+  - name: shared-hosts
+    emptyDir: {}
+  - name: test-ca
+    configMap:
+      name: test-ca-bundle
   restartPolicy: Never
 EOF
 
@@ -194,21 +240,77 @@ metadata:
     intercept-proxy/enabled: "true"
   annotations:
     intercept-proxy/opa-data: |
+      allowed_domains: []
       unrestricted_domains:
         - test-a.local
         - test-b.local
+      github_read_access_enabled: false
+      github_allowed_users: []
+      github_allowed_repos: []
+      aws_access_enabled: false
+      aws_allowed_services: []
 spec:
   securityContext:
     runAsUser: 12345
     runAsGroup: 12345
     fsGroup: 12345
-  containers:
-  - name: test
+  initContainers:
+  - name: setup-ca-and-hosts
     image: curlimages/curl:latest
-    command: ["sh", "-c", "echo '$SERVICE_IP test-a.local test-b.local' >> /etc/hosts && sleep 3600"]
+    command:
+    - sh
+    - -c
+    - |
+      # Add test CA to system CA bundle
+      cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
+      echo "" >> /shared-ca/ca-bundle.crt
+      cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
+
+      # Setup /etc/hosts for test domains
+      echo "$SERVICE_IP test-a.local test-b.local" > /shared-hosts/hosts-append
+    volumeMounts:
+    - name: shared-ca
+      mountPath: /shared-ca
+    - name: shared-hosts
+      mountPath: /shared-hosts
+    - name: test-ca
+      mountPath: /test-ca
+      readOnly: true
     securityContext:
       runAsUser: 12345
       runAsGroup: 12345
+  containers:
+  - name: test
+    image: curlimages/curl:latest
+    command:
+    - sh
+    - -c
+    - |
+      # Append custom hosts to /etc/hosts
+      cat /shared-hosts/hosts-append >> /etc/hosts
+      # Sleep to keep container running
+      sleep 3600
+    env:
+    - name: SSL_CERT_FILE
+      value: /shared-ca/ca-bundle.crt
+    volumeMounts:
+    - name: shared-ca
+      mountPath: /shared-ca
+      readOnly: true
+    - name: shared-hosts
+      mountPath: /shared-hosts
+      readOnly: true
+    securityContext:
+      runAsUser: 12345
+      runAsGroup: 12345
+  volumes:
+  - name: shared-ca
+    emptyDir: {}
+  - name: shared-hosts
+    emptyDir: {}
+  - name: test-ca
+    configMap:
+      name: test-ca-bundle
   restartPolicy: Never
 EOF
 
