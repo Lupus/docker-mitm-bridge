@@ -126,7 +126,7 @@ spec:
     runAsGroup: 12345
     fsGroup: 12345
   initContainers:
-  - name: setup-ca-and-hosts
+  - name: setup-ca
     image: curlimages/curl:latest
     command:
     - sh
@@ -136,17 +136,9 @@ spec:
       cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
       echo "" >> /shared-ca/ca-bundle.crt
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
-
-      # Save SERVICE_IP env var to a file for use by main container
-      echo \$SERVICE_IP > /shared-hosts/service-ip
-    env:
-    - name: SERVICE_IP
-      value: "$SERVICE_IP"
     volumeMounts:
     - name: shared-ca
       mountPath: /shared-ca
-    - name: shared-hosts
-      mountPath: /shared-hosts
     - name: test-ca
       mountPath: /test-ca
       readOnly: true
@@ -160,9 +152,6 @@ spec:
     - sh
     - -c
     - |
-      # Read the service IP from the file created by init container
-      export SERVICE_IP=$(cat /shared-hosts/service-ip)
-      echo "SERVICE_IP is: \$SERVICE_IP"
       # Sleep to keep container running
       sleep 3600
     env:
@@ -172,16 +161,11 @@ spec:
     - name: shared-ca
       mountPath: /shared-ca
       readOnly: true
-    - name: shared-hosts
-      mountPath: /shared-hosts
-      readOnly: true
     securityContext:
       runAsUser: 12345
       runAsGroup: 12345
   volumes:
   - name: shared-ca
-    emptyDir: {}
-  - name: shared-hosts
     emptyDir: {}
   - name: test-ca
     configMap:
@@ -259,7 +243,7 @@ spec:
     runAsGroup: 12345
     fsGroup: 12345
   initContainers:
-  - name: setup-ca-and-hosts
+  - name: setup-ca
     image: curlimages/curl:latest
     command:
     - sh
@@ -269,17 +253,9 @@ spec:
       cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
       echo "" >> /shared-ca/ca-bundle.crt
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
-
-      # Save SERVICE_IP env var to a file for use by main container
-      echo \$SERVICE_IP > /shared-hosts/service-ip
-    env:
-    - name: SERVICE_IP
-      value: "$SERVICE_IP"
     volumeMounts:
     - name: shared-ca
       mountPath: /shared-ca
-    - name: shared-hosts
-      mountPath: /shared-hosts
     - name: test-ca
       mountPath: /test-ca
       readOnly: true
@@ -293,9 +269,6 @@ spec:
     - sh
     - -c
     - |
-      # Read the service IP from the file created by init container
-      export SERVICE_IP=$(cat /shared-hosts/service-ip)
-      echo "SERVICE_IP is: \$SERVICE_IP"
       # Sleep to keep container running
       sleep 3600
     env:
@@ -305,16 +278,11 @@ spec:
     - name: shared-ca
       mountPath: /shared-ca
       readOnly: true
-    - name: shared-hosts
-      mountPath: /shared-hosts
-      readOnly: true
     securityContext:
       runAsUser: 12345
       runAsGroup: 12345
   volumes:
   - name: shared-ca
-    emptyDir: {}
-  - name: shared-hosts
     emptyDir: {}
   - name: test-ca
     configMap:
