@@ -126,8 +126,8 @@ spec:
     runAsGroup: 12345
     fsGroup: 12345
   initContainers:
-  - name: setup-ca
-    image: curlimages/curl:latest
+  - name: setup-ca-and-hosts
+    image: nicolaka/netshoot:latest
     command:
     - sh
     - -c
@@ -136,6 +136,16 @@ spec:
       cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
       echo "" >> /shared-ca/ca-bundle.crt
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
+
+      # Add DNS entries to /etc/hosts for test domains
+      # These will be inherited by all containers in the pod
+      echo "$SERVICE_IP test-a.local" >> /etc/hosts
+      echo "$SERVICE_IP test-b.local" >> /etc/hosts
+      echo "Added DNS entries to /etc/hosts:"
+      grep "test-.*\.local" /etc/hosts
+    env:
+    - name: SERVICE_IP
+      value: "$SERVICE_IP"
     volumeMounts:
     - name: shared-ca
       mountPath: /shared-ca
@@ -143,8 +153,11 @@ spec:
       mountPath: /test-ca
       readOnly: true
     securityContext:
-      runAsUser: 12345
-      runAsGroup: 12345
+      runAsUser: 0
+      runAsGroup: 0
+      capabilities:
+        add:
+        - NET_ADMIN
   containers:
   - name: test
     image: curlimages/curl:latest
@@ -186,7 +199,7 @@ log_info "Step 6: Test Sequence 1 - Access test-a.local first, then test-b.local
 echo
 
 log_info "Testing test-a.local..."
-RESULT_A1=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" --resolve "test-a.local:443:$SERVICE_IP" https://test-a.local/ 2>&1 || echo "FAILED")
+RESULT_A1=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" https://test-a.local/ 2>&1 || echo "FAILED")
 HTTP_CODE_A1=$(echo "$RESULT_A1" | grep "HTTP_CODE:" | cut -d: -f2)
 RESPONSE_A1=$(echo "$RESULT_A1" | grep -v "HTTP_CODE:")
 
@@ -201,7 +214,7 @@ fi
 echo
 
 log_info "Testing test-b.local..."
-RESULT_B1=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" --resolve "test-b.local:443:$SERVICE_IP" https://test-b.local/ 2>&1 || echo "FAILED")
+RESULT_B1=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" https://test-b.local/ 2>&1 || echo "FAILED")
 HTTP_CODE_B1=$(echo "$RESULT_B1" | grep "HTTP_CODE:" | cut -d: -f2)
 RESPONSE_B1=$(echo "$RESULT_B1" | grep -v "HTTP_CODE:")
 
@@ -243,8 +256,8 @@ spec:
     runAsGroup: 12345
     fsGroup: 12345
   initContainers:
-  - name: setup-ca
-    image: curlimages/curl:latest
+  - name: setup-ca-and-hosts
+    image: nicolaka/netshoot:latest
     command:
     - sh
     - -c
@@ -253,6 +266,16 @@ spec:
       cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
       echo "" >> /shared-ca/ca-bundle.crt
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
+
+      # Add DNS entries to /etc/hosts for test domains
+      # These will be inherited by all containers in the pod
+      echo "$SERVICE_IP test-a.local" >> /etc/hosts
+      echo "$SERVICE_IP test-b.local" >> /etc/hosts
+      echo "Added DNS entries to /etc/hosts:"
+      grep "test-.*\.local" /etc/hosts
+    env:
+    - name: SERVICE_IP
+      value: "$SERVICE_IP"
     volumeMounts:
     - name: shared-ca
       mountPath: /shared-ca
@@ -260,8 +283,11 @@ spec:
       mountPath: /test-ca
       readOnly: true
     securityContext:
-      runAsUser: 12345
-      runAsGroup: 12345
+      runAsUser: 0
+      runAsGroup: 0
+      capabilities:
+        add:
+        - NET_ADMIN
   containers:
   - name: test
     image: curlimages/curl:latest
@@ -300,7 +326,7 @@ log_info "Step 8: Test Sequence 2 - Access test-b.local first, then test-a.local
 echo
 
 log_info "Testing test-b.local..."
-RESULT_B2=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" --resolve "test-b.local:443:$SERVICE_IP" https://test-b.local/ 2>&1 || echo "FAILED")
+RESULT_B2=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" https://test-b.local/ 2>&1 || echo "FAILED")
 HTTP_CODE_B2=$(echo "$RESULT_B2" | grep "HTTP_CODE:" | cut -d: -f2)
 RESPONSE_B2=$(echo "$RESULT_B2" | grep -v "HTTP_CODE:")
 
@@ -315,7 +341,7 @@ fi
 echo
 
 log_info "Testing test-a.local..."
-RESULT_A2=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" --resolve "test-a.local:443:$SERVICE_IP" https://test-a.local/ 2>&1 || echo "FAILED")
+RESULT_A2=$(kubectl exec test-client -n "$NAMESPACE" -c test -- curl -s -w "\nHTTP_CODE:%{http_code}" https://test-a.local/ 2>&1 || echo "FAILED")
 HTTP_CODE_A2=$(echo "$RESULT_A2" | grep "HTTP_CODE:" | cut -d: -f2)
 RESPONSE_A2=$(echo "$RESULT_A2" | grep -v "HTTP_CODE:")
 
