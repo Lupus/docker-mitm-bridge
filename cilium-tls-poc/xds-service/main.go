@@ -1214,12 +1214,6 @@ func (s *CDSServer) buildClusters() error {
 				}(),
 			},
 		},
-		// Connection pooling settings to keep connections alive longer
-		// This reduces connection churn and maintains good performance
-		CommonHttpProtocolOptions: &core.HttpProtocolOptions{
-			IdleTimeout:              durationpb.New(600 * time.Second), // 10 minutes
-			MaxRequestsPerConnection: wrapperspb.UInt32(0),              // Unlimited requests per connection
-		},
 		// Circuit breaker to allow more concurrent connections
 		CircuitBreakers: &cluster.CircuitBreakers{
 			Thresholds: []*cluster.CircuitBreakers_Thresholds{
@@ -1245,8 +1239,11 @@ func (s *CDSServer) buildClusters() error {
 							},
 						},
 					},
+					// Connection pooling settings to keep connections alive longer
+					// This reduces connection churn and maintains good performance
 					CommonHttpProtocolOptions: &core.HttpProtocolOptions{
-						IdleTimeout: durationpb.New(600 * time.Second),
+						IdleTimeout:              durationpb.New(600 * time.Second), // 10 minutes
+						MaxRequestsPerConnection: wrapperspb.UInt32(0),              // Unlimited requests per connection
 					},
 				}
 				any, _ := anypb.New(httpOptions)
