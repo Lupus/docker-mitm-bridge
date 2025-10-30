@@ -138,7 +138,7 @@ spec:
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
 
       # Save SERVICE_IP to a file for use by main container
-      echo "$SERVICE_IP" > /shared-hosts/service-ip
+      echo "\$SERVICE_IP" > /shared-hosts/service-ip
     env:
     - name: SERVICE_IP
       value: "$SERVICE_IP"
@@ -271,7 +271,7 @@ spec:
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
 
       # Save SERVICE_IP to a file for use by main container
-      echo "$SERVICE_IP" > /shared-hosts/service-ip
+      echo "\$SERVICE_IP" > /shared-hosts/service-ip
     env:
     - name: SERVICE_IP
       value: "$SERVICE_IP"
