@@ -125,8 +125,15 @@ spec:
     runAsUser: 12345
     runAsGroup: 12345
     fsGroup: 12345
+  # Use hostAliases to add DNS entries for test domains
+  # This is the correct way to add /etc/hosts entries in Kubernetes pods
+  hostAliases:
+  - ip: "$SERVICE_IP"
+    hostnames:
+    - test-a.local
+    - test-b.local
   initContainers:
-  - name: setup-ca-and-hosts
+  - name: setup-ca
     image: nicolaka/netshoot:latest
     command:
     - sh
@@ -136,28 +143,13 @@ spec:
       cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
       echo "" >> /shared-ca/ca-bundle.crt
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
-
-      # Add DNS entries to /etc/hosts for test domains
-      # These will be inherited by all containers in the pod
-      echo "$SERVICE_IP test-a.local" >> /etc/hosts
-      echo "$SERVICE_IP test-b.local" >> /etc/hosts
-      echo "Added DNS entries to /etc/hosts:"
-      grep "test-.*\.local" /etc/hosts
-    env:
-    - name: SERVICE_IP
-      value: "$SERVICE_IP"
+      echo "CA bundle created successfully"
     volumeMounts:
     - name: shared-ca
       mountPath: /shared-ca
     - name: test-ca
       mountPath: /test-ca
       readOnly: true
-    securityContext:
-      runAsUser: 0
-      runAsGroup: 0
-      capabilities:
-        add:
-        - NET_ADMIN
   containers:
   - name: test
     image: curlimages/curl:latest
@@ -255,8 +247,15 @@ spec:
     runAsUser: 12345
     runAsGroup: 12345
     fsGroup: 12345
+  # Use hostAliases to add DNS entries for test domains
+  # This is the correct way to add /etc/hosts entries in Kubernetes pods
+  hostAliases:
+  - ip: "$SERVICE_IP"
+    hostnames:
+    - test-a.local
+    - test-b.local
   initContainers:
-  - name: setup-ca-and-hosts
+  - name: setup-ca
     image: nicolaka/netshoot:latest
     command:
     - sh
@@ -266,28 +265,13 @@ spec:
       cat /etc/ssl/certs/ca-certificates.crt > /shared-ca/ca-bundle.crt
       echo "" >> /shared-ca/ca-bundle.crt
       cat /test-ca/test-ca.crt >> /shared-ca/ca-bundle.crt
-
-      # Add DNS entries to /etc/hosts for test domains
-      # These will be inherited by all containers in the pod
-      echo "$SERVICE_IP test-a.local" >> /etc/hosts
-      echo "$SERVICE_IP test-b.local" >> /etc/hosts
-      echo "Added DNS entries to /etc/hosts:"
-      grep "test-.*\.local" /etc/hosts
-    env:
-    - name: SERVICE_IP
-      value: "$SERVICE_IP"
+      echo "CA bundle created successfully"
     volumeMounts:
     - name: shared-ca
       mountPath: /shared-ca
     - name: test-ca
       mountPath: /test-ca
       readOnly: true
-    securityContext:
-      runAsUser: 0
-      runAsGroup: 0
-      capabilities:
-        add:
-        - NET_ADMIN
   containers:
   - name: test
     image: curlimages/curl:latest
