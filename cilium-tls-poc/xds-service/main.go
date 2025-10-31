@@ -772,6 +772,14 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 					},
 				},
 			},
+			// CRITICAL FIX: Disable session resumption to force fresh TLS handshakes.
+			// This ensures SNI-based filter chain selection happens on every connection,
+			// preventing the fallback certificate from being used during session resumption.
+			// Without this, clients resuming sessions may bypass SNI extraction and get
+			// the wrong certificate (blocked.local) instead of the domain-specific cert.
+			SessionTicketKeysType: &tlsv3.DownstreamTlsContext_DisableStatelessSessionResumption{
+				DisableStatelessSessionResumption: true,
+			},
 		}
 
 		downstreamTLSAny, err := anypb.New(downstreamTLS)
@@ -939,6 +947,12 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 					},
 				},
 			},
+		},
+		// CRITICAL FIX: Also disable session resumption for fallback chain to prevent
+		// cross-contamination where a session established with the fallback certificate
+		// could be reused for subsequent requests to allowed domains.
+		SessionTicketKeysType: &tlsv3.DownstreamTlsContext_DisableStatelessSessionResumption{
+			DisableStatelessSessionResumption: true,
 		},
 	}
 
