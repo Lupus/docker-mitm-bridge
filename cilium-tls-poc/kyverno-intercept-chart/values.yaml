@@ -70,6 +70,8 @@ xds:
   httpPort: 15081   # HTTP port for CA distribution
   uid: 103          # Run as non-root user
   gid: 103
+  # Test mode: skip certificate validation for testing with self-signed certs
+  testMode: false
   resources:
     limits:
       memory: "128Mi"

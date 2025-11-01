@@ -193,7 +193,8 @@ install_chart() {
         -n "$TEST_NAMESPACE" \
         --wait \
         --timeout 5m \
-        --set testWorkload.enabled=false
+        --set testWorkload.enabled=false \
+        --set xds.testMode=true
 
     log_info "Chart installed successfully"
 

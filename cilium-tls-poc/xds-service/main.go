@@ -1268,6 +1268,7 @@ func (s *CDSServer) buildClusters() error {
 			Name: "envoy.transport_sockets.tls",
 			ConfigType: &core.TransportSocket_TypedConfig{
 				TypedConfig: func() *anypb.Any {
+					// Build UpstreamTlsContext
 					upstreamTLS := &tlsv3.UpstreamTlsContext{
 						Sni: "{sni}",
 						// CRITICAL FIX: Disable TLS session resumption to prevent caching
@@ -1276,7 +1277,15 @@ func (s *CDSServer) buildClusters() error {
 						// hostname accessed works - subsequent ones fail with CERTIFICATE_VERIFY_FAILED.
 						// This is because session resumption caches per IP, not per (IP, SNI) tuple.
 						MaxSessionKeys: wrapperspb.UInt32(0), // Disable session resumption
-						CommonTlsContext: &tlsv3.CommonTlsContext{
+					}
+
+					// Check if TEST_MODE environment variable is set to skip certificate validation
+					// This is used for testing with self-signed certificates (e.g., *.local domains)
+					testMode := os.Getenv("TEST_MODE") == "true"
+
+					if !testMode {
+						// Production mode: validate certificates using system CA bundle
+						upstreamTLS.CommonTlsContext = &tlsv3.CommonTlsContext{
 							ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
 								ValidationContext: &tlsv3.CertificateValidationContext{
 									TrustedCa: &core.DataSource{
@@ -1286,7 +1295,17 @@ func (s *CDSServer) buildClusters() error {
 									},
 								},
 							},
-						},
+						}
+					} else {
+						// Test mode: skip certificate validation for test domains
+						// This allows testing with self-signed certificates
+						upstreamTLS.CommonTlsContext = &tlsv3.CommonTlsContext{
+							ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
+								ValidationContext: &tlsv3.CertificateValidationContext{
+									TrustChainVerification: tlsv3.CertificateValidationContext_ACCEPT_UNTRUSTED,
+								},
+							},
+						}
 					}
 					any, _ := anypb.New(upstreamTLS)
 					return any

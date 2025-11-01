@@ -342,6 +342,8 @@ spec:
               value: "/ca-secret/tls.crt"
             - name: CA_KEY_PATH
               value: "/ca-secret/tls.key"
+            - name: TEST_MODE
+              value: "{{ .Values.xds.testMode }}"
             ports:
             - name: grpc
               containerPort: {{ .Values.xds.grpcPort }}
