@@ -59,6 +59,12 @@ This Helm chart provides a complete TLS interception solution that:
 
 ## Key Features
 
+### Multi-SNI Support with TLS Session Resumption Disabled
+- **Correct handling of multiple hostnames on same IP**: TLS session resumption is disabled to prevent validation context caching per IP
+- **Different certificates per hostname**: Supports CDN and cloud provider scenarios where multiple domains share an IP with different TLS certificates
+- **Optimized connection pooling**: 600-second idle timeout and unlimited requests per connection maintain performance
+- **No access-order dependency**: All hostnames work correctly regardless of which is accessed first
+
 ### UID-Based Traffic Isolation
 - **Prevents infinite loops**: Envoy and OPA traffic excluded from redirection by UID
 - **Port isolation**: Main container cannot access sidecar infrastructure ports (15000-15099)
