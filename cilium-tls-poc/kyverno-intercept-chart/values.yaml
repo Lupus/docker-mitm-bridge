@@ -111,6 +111,7 @@ opa:
     # Domains with unrestricted access (all HTTP methods)
     unrestrictedDomains:
       - api.anthropic.com
+      - console.anthropic.com
       - api.openai.com
       - http-server  # Test HTTP server for cluster separation tests
       - http-server.kyverno-intercept.svc.cluster.local

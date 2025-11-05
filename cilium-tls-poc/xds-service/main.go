@@ -772,6 +772,14 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 					},
 				},
 			},
+			// CRITICAL FIX: Disable session resumption to force fresh TLS handshakes.
+			// This ensures SNI-based filter chain selection happens on every connection,
+			// preventing the fallback certificate from being used during session resumption.
+			// Without this, clients resuming sessions may bypass SNI extraction and get
+			// the wrong certificate (blocked.local) instead of the domain-specific cert.
+			SessionTicketKeysType: &tlsv3.DownstreamTlsContext_DisableStatelessSessionResumption{
+				DisableStatelessSessionResumption: true,
+			},
 		}
 
 		downstreamTLSAny, err := anypb.New(downstreamTLS)
@@ -939,6 +947,12 @@ func (s *LDSServer) buildHTTPSListener() (*anypb.Any, error) {
 					},
 				},
 			},
+		},
+		// CRITICAL FIX: Also disable session resumption for fallback chain to prevent
+		// cross-contamination where a session established with the fallback certificate
+		// could be reused for subsequent requests to allowed domains.
+		SessionTicketKeysType: &tlsv3.DownstreamTlsContext_DisableStatelessSessionResumption{
+			DisableStatelessSessionResumption: true,
 		},
 	}
 
@@ -1214,19 +1228,63 @@ func (s *CDSServer) buildClusters() error {
 				}(),
 			},
 		},
+		// Circuit breaker to allow more concurrent connections
+		CircuitBreakers: &cluster.CircuitBreakers{
+			Thresholds: []*cluster.CircuitBreakers_Thresholds{
+				{
+					MaxConnections: wrapperspb.UInt32(2048),
+				},
+			},
+		},
+		// REQUIRED: Configure auto_sni and auto_san_validation via HttpProtocolOptions
+		// This is required for dynamic_forward_proxy clusters to properly handle SNI and certificate validation
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": func() *anypb.Any {
+				httpOptions := &httpproto.HttpProtocolOptions{
+					// Enable auto SNI and SAN validation
+					UpstreamHttpProtocolOptions: &core.UpstreamHttpProtocolOptions{
+						AutoSni:           true, // Automatically set SNI from Host header
+						AutoSanValidation: true, // Automatically validate certificate SAN
+					},
+					UpstreamProtocolOptions: &httpproto.HttpProtocolOptions_AutoConfig{
+						AutoConfig: &httpproto.HttpProtocolOptions_AutoHttpConfig{
+							HttpProtocolOptions: &core.Http1ProtocolOptions{
+								EnableTrailers: true,
+							},
+						},
+					},
+					// Connection pooling settings to keep connections alive longer
+					// This reduces connection churn and maintains good performance
+					CommonHttpProtocolOptions: &core.HttpProtocolOptions{
+						IdleTimeout:              durationpb.New(600 * time.Second), // 10 minutes
+						MaxRequestsPerConnection: wrapperspb.UInt32(0),              // Unlimited requests per connection
+					},
+				}
+				any, _ := anypb.New(httpOptions)
+				return any
+			}(),
+		},
 		TransportSocket: &core.TransportSocket{
 			Name: "envoy.transport_sockets.tls",
 			ConfigType: &core.TransportSocket_TypedConfig{
 				TypedConfig: func() *anypb.Any {
+					// Build UpstreamTlsContext
 					upstreamTLS := &tlsv3.UpstreamTlsContext{
 						Sni: "{sni}",
-						CommonTlsContext: &tlsv3.CommonTlsContext{
-							ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
-								ValidationContext: &tlsv3.CertificateValidationContext{
-									TrustedCa: &core.DataSource{
-										Specifier: &core.DataSource_Filename{
-											Filename: "/etc/ssl/certs/ca-certificates.crt",
-										},
+						// CRITICAL FIX: Disable TLS session resumption to prevent caching
+						// validation context per IP. Without this, when multiple hostnames
+						// resolve to the same IP with different certificates, only the first
+						// hostname accessed works - subsequent ones fail with CERTIFICATE_VERIFY_FAILED.
+						// This is because session resumption caches per IP, not per (IP, SNI) tuple.
+						MaxSessionKeys: wrapperspb.UInt32(0), // Disable session resumption
+					}
+
+					upstreamTLS.CommonTlsContext = &tlsv3.CommonTlsContext{
+						ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
+							ValidationContext: &tlsv3.CertificateValidationContext{
+								TrustedCa: &core.DataSource{
+									Specifier: &core.DataSource_Filename{
+										Filename: "/etc/ssl/certs/ca-certificates.crt",
 									},
 								},
 							},
