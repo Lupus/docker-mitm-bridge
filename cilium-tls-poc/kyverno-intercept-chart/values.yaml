@@ -170,30 +170,38 @@ monitoring:
 cleanup:
   enabled: true
 
-# NetworkPolicy configuration - blocks K8s API and metadata service access
+# NetworkPolicy configuration - blocks cloud metadata service access
 # Mitigates SECURITY_ASSESSMENT.md vulnerability #3: OPA Policy Injection via K8s API
+#
+# Security Model:
+# - PRIMARY PROTECTION: automountServiceAccountToken: false (set via Kyverno mutation)
+#   prevents K8s API access by removing credentials from the pod
+# - SECONDARY PROTECTION: NetworkPolicy blocks cloud metadata service (169.254.169.254)
+#   which could leak credentials in cloud environments
+#
+# Note: We intentionally do NOT block the K8s service CIDR (10.96.0.0/12) because:
+# 1. automountServiceAccountToken: false already prevents authenticated K8s API access
+# 2. Blocking the service CIDR would break access to legitimate in-cluster services
+# 3. Anonymous K8s API access is typically disabled in production clusters
 networkPolicy:
   enabled: true
 
   # CIDRs to block from intercepted pods
-  # These should include your cluster's service CIDR and cloud metadata service
   blockedCIDRs:
-    # Kubernetes service CIDR (default kubeadm: 10.96.0.0/12)
-    # Adjust this to match your cluster's service CIDR
-    - "10.96.0.0/12"
-    # Alternative common service CIDRs (uncomment if applicable)
-    # - "10.0.0.0/8"        # Broader internal network block
-    # - "172.16.0.0/12"     # Private network range
-    # - "192.168.0.0/16"    # Private network range
-
-    # Cloud metadata services (AWS, GCP, Azure all use this)
+    # Cloud metadata services (AWS, GCP, Azure all use this IP)
+    # This prevents credential theft via IMDS in cloud environments
     - "169.254.169.254/32"
 
-    # AWS IMDSv2 IPv6 (if applicable)
+    # AWS IMDSv2 IPv6 (uncomment if using IPv6 in AWS)
     # - "fd00:ec2::254/128"
 
+    # Optional: Block K8s API server IP directly if known
+    # Note: Only enable this if you know your cluster's API server IP
+    # and don't need any in-cluster service access
+    # - "10.96.0.1/32"  # Typical K8s API server IP (first IP in service CIDR)
+
   # Allow communication between pods in the same namespace
-  # Required if your setup needs inter-pod communication beyond localhost
+  # Enable this if intercepted pods need to communicate with other pods
   allowIntraNamespace: false
 
   # Additional egress rules (advanced configuration)

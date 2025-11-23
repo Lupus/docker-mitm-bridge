@@ -1,13 +1,16 @@
 {{- if .Values.networkPolicy.enabled }}
-# NetworkPolicy to block Kubernetes API and metadata service access from intercepted pods.
-# This mitigates the OPA policy injection attack via K8s API (SECURITY_ASSESSMENT.md #3).
+# NetworkPolicy to block cloud metadata service access from intercepted pods.
+# This is part of the defense-in-depth for SECURITY_ASSESSMENT.md vulnerability #3.
+#
+# Security Model:
+# - PRIMARY: automountServiceAccountToken: false (Kyverno mutation) removes K8s API credentials
+# - SECONDARY: This NetworkPolicy blocks cloud metadata service (credential theft prevention)
 #
 # How it works:
 # - Kubernetes NetworkPolicy is allow-list based
-# - By specifying only allowed egress destinations, everything else is implicitly denied
-# - We allow DNS (required for hostname resolution) and HTTP/HTTPS to external destinations
-# - We explicitly exclude internal cluster CIDRs and cloud metadata service
-# - This blocks access to kubernetes.default.svc (K8s API) and 169.254.169.254 (metadata)
+# - We allow DNS (required for hostname resolution) and HTTP/HTTPS
+# - We explicitly exclude cloud metadata service (169.254.169.254) from allowed destinations
+# - This prevents IMDS credential theft in cloud environments (AWS, GCP, Azure)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -34,8 +37,7 @@ spec:
         - protocol: TCP
           port: 53
 
-    # Allow HTTP traffic to external destinations only
-    # Excludes: cluster service CIDR, pod CIDR, and cloud metadata service
+    # Allow HTTP traffic, excluding blocked CIDRs (e.g., cloud metadata service)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -47,8 +49,7 @@ spec:
         - protocol: TCP
           port: 80
 
-    # Allow HTTPS traffic to external destinations only
-    # Same exclusions as HTTP - this blocks kubernetes.default.svc:443
+    # Allow HTTPS traffic, excluding blocked CIDRs (e.g., cloud metadata service)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
