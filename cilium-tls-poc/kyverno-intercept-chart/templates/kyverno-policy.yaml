@@ -146,37 +146,35 @@ spec:
               iptables -t filter -A OUTPUT -j SIDECAR_ISOLATE
 
               # IPv6 filtering (best-effort, silently fails if IPv6 unavailable)
-              {
-                ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null
-                ip6tables -t nat -F PROXY_REDIRECT
-                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN
-                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN
-                {{- if .Values.xds.enabled }}
-                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN
-                {{- end }}
-                ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port ${ENVOY_HTTP_PORT}
-                ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 443 -j REDIRECT --to-port ${ENVOY_HTTPS_PORT}
-                ip6tables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
-                ip6tables -t filter -N SIDECAR_ISOLATE 2>/dev/null
-                ip6tables -t filter -F SIDECAR_ISOLATE
-                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT
-                {{- if .Values.xds.enabled }}
-                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${XDS_UID} -j ACCEPT
-                {{- end }}
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.httpsPort }} -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -p udp --dport 53 -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport 53 -j ACCEPT
-                {{- range .Values.initContainer.redirectPorts }}
-                ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport {{ . }} -j ACCEPT
-                {{- end }}
-                ip6tables -t filter -A SIDECAR_ISOLATE -j DROP
-                ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE
-              } >/dev/null 2>&1 || true
+              ip6tables -t nat -N PROXY_REDIRECT >/dev/null 2>&1 || true
+              ip6tables -t nat -F PROXY_REDIRECT >/dev/null 2>&1 || true
+              ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN >/dev/null 2>&1 || true
+              ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN >/dev/null 2>&1 || true
+              {{- if .Values.xds.enabled }}
+              ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN >/dev/null 2>&1 || true
+              {{- end }}
+              ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port ${ENVOY_HTTP_PORT} >/dev/null 2>&1 || true
+              ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 443 -j REDIRECT --to-port ${ENVOY_HTTPS_PORT} >/dev/null 2>&1 || true
+              ip6tables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT >/dev/null 2>&1 || true
+              ip6tables -t filter -N SIDECAR_ISOLATE >/dev/null 2>&1 || true
+              ip6tables -t filter -F SIDECAR_ISOLATE >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT >/dev/null 2>&1 || true
+              {{- if .Values.xds.enabled }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${XDS_UID} -j ACCEPT >/dev/null 2>&1 || true
+              {{- end }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.httpsPort }} -j ACCEPT >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -j ACCEPT >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -p udp --dport 53 -j ACCEPT >/dev/null 2>&1 || true
+              ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport 53 -j ACCEPT >/dev/null 2>&1 || true
+              {{- range .Values.initContainer.redirectPorts }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport {{ . }} -j ACCEPT >/dev/null 2>&1 || true
+              {{- end }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -j DROP >/dev/null 2>&1 || true
+              ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE >/dev/null 2>&1 || true
 
               # List rules for debugging
               echo "iptables rules applied:"
