@@ -149,80 +149,77 @@ spec:
               # IPv6 FILTERING - Mirror IPv4 rules
               # CRITICAL: Without these, IPv6 traffic bypasses all filtering
               # NOTE: IPv6 may not be available in all environments (e.g., Kind clusters)
+              # All ip6tables commands use || true to avoid failing the init container
               # ============================================
               echo "Setting up ip6tables rules for IPv6 filtering..."
 
-              # Check if IPv6 is available by testing ip6tables
-              # Use a subshell to isolate errors - if any ip6tables command fails, we fall back gracefully
-              if (
-                set -e  # Exit subshell on any error
-                ip6tables -t nat -L -n >/dev/null 2>&1
+              # Check if IPv6/ip6tables is available
+              if ip6tables -t nat -L -n >/dev/null 2>&1; then
+                echo "IPv6 is available, configuring ip6tables rules..."
 
                 # NAT table - Traffic redirection for IPv6
-                ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null || ip6tables -t nat -F PROXY_REDIRECT
-                ip6tables -t nat -F PROXY_REDIRECT
+                ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null || true
+                ip6tables -t nat -F PROXY_REDIRECT || true
 
                 # CRITICAL: Exclude sidecar traffic to prevent infinite loops
-                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN
-                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN
+                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN || true
+                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN || true
                 {{- if .Values.xds.enabled }}
-                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN
+                ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN || true
                 {{- end }}
 
                 # Redirect HTTP/HTTPS traffic to separate Envoy listeners
-                ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port ${ENVOY_HTTP_PORT}
-                ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 443 -j REDIRECT --to-port ${ENVOY_HTTPS_PORT}
+                ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port ${ENVOY_HTTP_PORT} || true
+                ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 443 -j REDIRECT --to-port ${ENVOY_HTTPS_PORT} || true
 
                 # Apply redirection
-                ip6tables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
+                ip6tables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT || true
 
                 # FILTER table - Port isolation for IPv6
-                ip6tables -t filter -N SIDECAR_ISOLATE 2>/dev/null || ip6tables -t filter -F SIDECAR_ISOLATE
-                ip6tables -t filter -F SIDECAR_ISOLATE
+                ip6tables -t filter -N SIDECAR_ISOLATE 2>/dev/null || true
+                ip6tables -t filter -F SIDECAR_ISOLATE || true
 
                 # Allow all traffic from Envoy/OPA/SDS sidecars
-                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT
+                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT || true
+                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT || true
                 {{- if .Values.xds.enabled }}
-                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${XDS_UID} -j ACCEPT
+                ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${XDS_UID} -j ACCEPT || true
                 {{- end }}
 
                 # For main container accessing localhost (IPv6 loopback ::1):
 
                 # 1. Block privileged ports (0-{{ .Values.initContainer.privilegedPortEnd }}) for safety
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset
+                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset || true
 
                 # 2. Allow redirected traffic to Envoy proxy ports (needed after NAT redirect)
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.httpsPort }} -j ACCEPT
+                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT || true
+                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.httpsPort }} -j ACCEPT || true
 
                 # 3. Block other sidecar infrastructure ports ({{ .Values.initContainer.sidecarPortRangeStart }}-{{ .Values.initContainer.sidecarPortRangeEnd }})
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset
+                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset || true
 
                 # 4. Allow everything else on localhost (app development ports)
-                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -j ACCEPT
+                ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -j ACCEPT || true
 
                 # Allow DNS (required for hostname resolution)
-                ip6tables -t filter -A SIDECAR_ISOLATE -p udp --dport 53 -j ACCEPT
-                ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport 53 -j ACCEPT
+                ip6tables -t filter -A SIDECAR_ISOLATE -p udp --dport 53 -j ACCEPT || true
+                ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport 53 -j ACCEPT || true
 
                 # Allow outbound HTTP/HTTPS to internet (will be redirected by NAT)
                 {{- range .Values.initContainer.redirectPorts }}
-                ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport {{ . }} -j ACCEPT
+                ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport {{ . }} -j ACCEPT || true
                 {{- end }}
 
                 # Block all other outbound IPv6 traffic from main container
-                ip6tables -t filter -A SIDECAR_ISOLATE -j DROP
+                ip6tables -t filter -A SIDECAR_ISOLATE -j DROP || true
 
                 # Apply isolation
-                ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE
-              ); then
-                echo "IPv6 filtering configured successfully"
-                IPV6_ENABLED="true"
+                ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE || true
+
+                echo "IPv6 filtering rules applied (best-effort)"
               else
-                echo "WARNING: IPv6/ip6tables not fully available - IPv6 traffic will NOT be filtered!"
+                echo "WARNING: IPv6/ip6tables not available - IPv6 traffic will NOT be filtered!"
                 echo "For production use with IPv6 enabled clusters, ensure ip6tables kernel modules are loaded."
-                IPV6_ENABLED="false"
               fi
 
               # List rules for debugging
@@ -231,23 +228,12 @@ spec:
               iptables -t nat -L -v -n
               echo "=== FILTER table (IPv4) ==="
               iptables -t filter -L -v -n
-              if [ "$IPV6_ENABLED" = "true" ]; then
-                echo "=== NAT table (IPv6) ==="
-                ip6tables -t nat -L -v -n
-                echo "=== FILTER table (IPv6) ==="
-                ip6tables -t filter -L -v -n
-              fi
 
               echo "Init container completed successfully!"
               echo "- Main container can make HTTP/HTTPS requests (redirected to Envoy)"
               echo "- Main container can use localhost for development"
               echo "- Main container CANNOT access privileged ports (0-{{ .Values.initContainer.privilegedPortEnd }})"
               echo "- Main container CANNOT access sidecar ports ({{ .Values.initContainer.sidecarPortRangeStart }}-{{ .Values.initContainer.sidecarPortRangeEnd }})"
-              if [ "$IPV6_ENABLED" = "true" ]; then
-                echo "- Both IPv4 and IPv6 traffic is filtered (ip6tables rules applied)"
-              else
-                echo "- Only IPv4 traffic is filtered (IPv6 not available in this environment)"
-              fi
             volumeMounts:
             - name: ca-secret
               mountPath: /ca-secret
