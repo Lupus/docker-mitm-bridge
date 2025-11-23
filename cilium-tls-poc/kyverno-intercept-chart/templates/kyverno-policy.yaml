@@ -153,11 +153,13 @@ spec:
               echo "Setting up ip6tables rules for IPv6 filtering..."
 
               # Check if IPv6 is available by testing ip6tables
-              if ip6tables -t nat -L -n >/dev/null 2>&1; then
-                echo "IPv6 is available, configuring ip6tables rules..."
+              # Use a subshell to isolate errors - if any ip6tables command fails, we fall back gracefully
+              if (
+                set -e  # Exit subshell on any error
+                ip6tables -t nat -L -n >/dev/null 2>&1
 
                 # NAT table - Traffic redirection for IPv6
-                ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null || true
+                ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null || ip6tables -t nat -F PROXY_REDIRECT
                 ip6tables -t nat -F PROXY_REDIRECT
 
                 # CRITICAL: Exclude sidecar traffic to prevent infinite loops
@@ -175,7 +177,7 @@ spec:
                 ip6tables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
 
                 # FILTER table - Port isolation for IPv6
-                ip6tables -t filter -N SIDECAR_ISOLATE 2>/dev/null || true
+                ip6tables -t filter -N SIDECAR_ISOLATE 2>/dev/null || ip6tables -t filter -F SIDECAR_ISOLATE
                 ip6tables -t filter -F SIDECAR_ISOLATE
 
                 # Allow all traffic from Envoy/OPA/SDS sidecars
@@ -210,15 +212,15 @@ spec:
                 {{- end }}
 
                 # Block all other outbound IPv6 traffic from main container
-                # Using DROP instead of REJECT for catch-all rule to avoid ip6tables compatibility issues
                 ip6tables -t filter -A SIDECAR_ISOLATE -j DROP
 
                 # Apply isolation
                 ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE
-
+              ); then
+                echo "IPv6 filtering configured successfully"
                 IPV6_ENABLED="true"
               else
-                echo "WARNING: IPv6/ip6tables not available - IPv6 traffic will NOT be filtered!"
+                echo "WARNING: IPv6/ip6tables not fully available - IPv6 traffic will NOT be filtered!"
                 echo "For production use with IPv6 enabled clusters, ensure ip6tables kernel modules are loaded."
                 IPV6_ENABLED="false"
               fi
