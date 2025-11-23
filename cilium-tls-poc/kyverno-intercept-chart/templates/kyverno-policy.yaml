@@ -150,6 +150,9 @@ spec:
               # NOTE: All commands use || true to prevent init container failures
               # ============================================
 
+              # Disable command echoing for ip6tables to reduce noise
+              set +x
+
               # Attempt to set up IPv6 filtering (best-effort, won't fail if IPv6 unavailable)
               {
                 ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null || true
@@ -183,6 +186,9 @@ spec:
                 ip6tables -t filter -A SIDECAR_ISOLATE -j DROP 2>/dev/null || true
                 ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE 2>/dev/null || true
               } 2>/dev/null || true
+
+              # Re-enable command echoing
+              set -x
 
               echo "IPv6 filtering: attempted (best-effort)"
 
