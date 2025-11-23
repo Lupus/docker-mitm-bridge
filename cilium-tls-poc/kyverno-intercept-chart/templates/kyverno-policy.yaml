@@ -55,9 +55,12 @@ spec:
                 echo "CA certificate generated successfully"
               fi
 
-              # Set permissions so xDS service (UID 103) can read the CA files
+              # Set permissions so xDS service (UID {{ .Values.xds.uid }}) can read the CA files
+              # CA certificate is public - readable by all
               chmod 644 /ca-secret/tls.crt
-              chmod 644 /ca-secret/tls.key
+              # CA private key MUST be restricted - only xDS service should read it
+              chmod 600 /ca-secret/tls.key
+              chown {{ .Values.xds.uid }}:{{ .Values.xds.gid }} /ca-secret/tls.key
 
               # Copy CA cert to shared volume for application containers
               cp /ca-secret/tls.crt /shared-ca-certs/intercept-ca.crt
