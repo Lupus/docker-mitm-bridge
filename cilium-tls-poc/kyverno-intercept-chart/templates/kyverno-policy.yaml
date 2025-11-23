@@ -381,6 +381,22 @@ spec:
               periodSeconds: 5
           {{- end }}
 
+  # Disable service account token mounting to prevent K8s API access
+  # This mitigates SECURITY_ASSESSMENT.md vulnerability #3: OPA Policy Injection via K8s API
+  - name: disable-service-account-token
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          selector:
+            matchLabels:
+              "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          automountServiceAccountToken: false
+
   # Inject volumes
   - name: inject-volumes
     match:
