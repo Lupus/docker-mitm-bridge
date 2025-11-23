@@ -184,7 +184,9 @@ cleanup:
 # 2. Blocking the service CIDR would break access to legitimate in-cluster services
 # 3. Anonymous K8s API access is typically disabled in production clusters
 networkPolicy:
-  enabled: true
+  # Disabled by default - requires CNI with NetworkPolicy support (Calico, Cilium, etc.)
+  # Enable if your cluster supports NetworkPolicy and you want to block cloud metadata service
+  enabled: false
 
   # CIDRs to block from intercepted pods
   blockedCIDRs:
