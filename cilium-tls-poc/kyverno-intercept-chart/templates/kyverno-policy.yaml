@@ -145,7 +145,9 @@ spec:
               # Apply isolation
               iptables -t filter -A OUTPUT -j SIDECAR_ISOLATE
 
-              # IPv6 filtering (best-effort, silently fails if IPv6 unavailable)
+              {{- if .Values.initContainer.ipv6FilteringEnabled }}
+              # IPv6 filtering (mirrors IPv4 rules for complete traffic filtering)
+              # See SECURITY_ASSESSMENT.md item #2 for details
               ip6tables -t nat -N PROXY_REDIRECT >/dev/null 2>&1 || true
               ip6tables -t nat -F PROXY_REDIRECT >/dev/null 2>&1 || true
               ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN >/dev/null 2>&1 || true
@@ -175,6 +177,11 @@ spec:
               {{- end }}
               ip6tables -t filter -A SIDECAR_ISOLATE -j DROP >/dev/null 2>&1 || true
               ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE >/dev/null 2>&1 || true
+              echo "IPv6 filtering enabled"
+              {{- else }}
+              # IPv6 filtering disabled by default (set initContainer.ipv6FilteringEnabled=true to enable)
+              # WARNING: Without IPv6 filtering, IPv6 traffic bypasses the proxy (see SECURITY_ASSESSMENT.md)
+              {{- end }}
 
               # List rules for debugging
               echo "iptables rules applied:"

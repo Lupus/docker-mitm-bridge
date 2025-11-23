@@ -138,6 +138,9 @@ initContainer:
   sidecarPortRangeStart: 15000  # Start of sidecar infrastructure range
   sidecarPortRangeEnd: 15099    # End of sidecar infrastructure range
   privilegedPortEnd: 1023       # Privileged ports to block (0-1023)
+  # IPv6 filtering - disabled by default (see SECURITY_ASSESSMENT.md item #2)
+  # Enable this if your cluster has IPv6 enabled and you need to filter IPv6 traffic
+  ipv6FilteringEnabled: false
 
 # Kyverno policy configuration
 kyverno:
