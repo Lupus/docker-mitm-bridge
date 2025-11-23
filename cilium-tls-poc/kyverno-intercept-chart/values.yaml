@@ -169,3 +169,40 @@ monitoring:
 # Cleanup hook configuration
 cleanup:
   enabled: true
+
+# NetworkPolicy configuration - blocks K8s API and metadata service access
+# Mitigates SECURITY_ASSESSMENT.md vulnerability #3: OPA Policy Injection via K8s API
+networkPolicy:
+  enabled: true
+
+  # CIDRs to block from intercepted pods
+  # These should include your cluster's service CIDR and cloud metadata service
+  blockedCIDRs:
+    # Kubernetes service CIDR (default kubeadm: 10.96.0.0/12)
+    # Adjust this to match your cluster's service CIDR
+    - "10.96.0.0/12"
+    # Alternative common service CIDRs (uncomment if applicable)
+    # - "10.0.0.0/8"        # Broader internal network block
+    # - "172.16.0.0/12"     # Private network range
+    # - "192.168.0.0/16"    # Private network range
+
+    # Cloud metadata services (AWS, GCP, Azure all use this)
+    - "169.254.169.254/32"
+
+    # AWS IMDSv2 IPv6 (if applicable)
+    # - "fd00:ec2::254/128"
+
+  # Allow communication between pods in the same namespace
+  # Required if your setup needs inter-pod communication beyond localhost
+  allowIntraNamespace: false
+
+  # Additional egress rules (advanced configuration)
+  # Example:
+  # additionalAllowedEgress:
+  #   - to:
+  #       - ipBlock:
+  #           cidr: 10.0.0.0/8
+  #     ports:
+  #       - protocol: TCP
+  #         port: 6379
+  additionalAllowedEgress: []

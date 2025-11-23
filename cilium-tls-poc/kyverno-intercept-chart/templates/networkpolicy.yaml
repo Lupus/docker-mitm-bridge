@@ -1,0 +1,77 @@
+{{- if .Values.networkPolicy.enabled }}
+# NetworkPolicy to block Kubernetes API and metadata service access from intercepted pods.
+# This mitigates the OPA policy injection attack via K8s API (SECURITY_ASSESSMENT.md #3).
+#
+# How it works:
+# - Kubernetes NetworkPolicy is allow-list based
+# - By specifying only allowed egress destinations, everything else is implicitly denied
+# - We allow DNS (required for hostname resolution) and HTTP/HTTPS to external destinations
+# - We explicitly exclude internal cluster CIDRs and cloud metadata service
+# - This blocks access to kubernetes.default.svc (K8s API) and 169.254.169.254 (metadata)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-block-k8s-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: security
+spec:
+  # Apply to pods with intercept-proxy enabled
+  podSelector:
+    matchLabels:
+      "{{ .Values.kyverno.annotationKey }}": "{{ .Values.kyverno.annotationValue }}"
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution (required for hostname lookups)
+    - to:
+        - namespaceSelector: {}  # Allow DNS to any namespace (CoreDNS)
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow HTTP traffic to external destinations only
+    # Excludes: cluster service CIDR, pod CIDR, and cloud metadata service
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range .Values.networkPolicy.blockedCIDRs }}
+              - {{ . }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: 80
+
+    # Allow HTTPS traffic to external destinations only
+    # Same exclusions as HTTP - this blocks kubernetes.default.svc:443
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range .Values.networkPolicy.blockedCIDRs }}
+              - {{ . }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+
+    {{- if .Values.networkPolicy.allowIntraNamespace }}
+    # Allow communication within the same namespace (for sidecars)
+    # This is needed because Envoy/OPA/xDS sidecars communicate via localhost
+    # which is not affected by NetworkPolicy, but inter-pod communication is
+    - to:
+        - podSelector: {}  # Same namespace
+      ports:
+        - protocol: TCP
+    {{- end }}
+
+    {{- range .Values.networkPolicy.additionalAllowedEgress }}
+    # Additional allowed egress rules from values
+    - {{ toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}
