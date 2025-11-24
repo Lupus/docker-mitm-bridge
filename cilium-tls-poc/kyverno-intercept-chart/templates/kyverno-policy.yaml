@@ -145,6 +145,44 @@ spec:
               # Apply isolation
               iptables -t filter -A OUTPUT -j SIDECAR_ISOLATE
 
+              {{- if .Values.initContainer.ipv6FilteringEnabled }}
+              # IPv6 filtering (mirrors IPv4 rules for complete traffic filtering)
+              # See SECURITY_ASSESSMENT.md item #2 for details
+              ip6tables -t nat -N PROXY_REDIRECT 2>/dev/null || true
+              ip6tables -t nat -F PROXY_REDIRECT
+              ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${ENVOY_UID} -j RETURN
+              ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${OPA_UID} -j RETURN
+              {{- if .Values.xds.enabled }}
+              ip6tables -t nat -A PROXY_REDIRECT -m owner --uid-owner ${XDS_UID} -j RETURN
+              {{- end }}
+              ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port ${ENVOY_HTTP_PORT}
+              ip6tables -t nat -A PROXY_REDIRECT -p tcp --dport 443 -j REDIRECT --to-port ${ENVOY_HTTPS_PORT}
+              ip6tables -t nat -A OUTPUT -p tcp -j PROXY_REDIRECT
+              ip6tables -t filter -N SIDECAR_ISOLATE 2>/dev/null || true
+              ip6tables -t filter -F SIDECAR_ISOLATE
+              ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${ENVOY_UID} -j ACCEPT
+              ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${OPA_UID} -j ACCEPT
+              {{- if .Values.xds.enabled }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -m owner --uid-owner ${XDS_UID} -j ACCEPT
+              {{- end }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport 0:{{ .Values.initContainer.privilegedPortEnd }} -j REJECT --reject-with tcp-reset
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.port }} -j ACCEPT
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.envoy.httpsPort }} -j ACCEPT
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -p tcp --dport {{ .Values.initContainer.sidecarPortRangeStart }}:{{ .Values.initContainer.sidecarPortRangeEnd }} -j REJECT --reject-with tcp-reset
+              ip6tables -t filter -A SIDECAR_ISOLATE -d ::1 -j ACCEPT
+              ip6tables -t filter -A SIDECAR_ISOLATE -p udp --dport 53 -j ACCEPT
+              ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport 53 -j ACCEPT
+              {{- range .Values.initContainer.redirectPorts }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -p tcp --dport {{ . }} -j ACCEPT
+              {{- end }}
+              ip6tables -t filter -A SIDECAR_ISOLATE -j DROP
+              ip6tables -t filter -A OUTPUT -j SIDECAR_ISOLATE
+              echo "IPv6 filtering enabled"
+              {{- else }}
+              # IPv6 filtering disabled by default (set initContainer.ipv6FilteringEnabled=true to enable)
+              # WARNING: Without IPv6 filtering, IPv6 traffic bypasses the proxy (see SECURITY_ASSESSMENT.md)
+              {{- end }}
+
               # List rules for debugging
               echo "iptables rules applied:"
               echo "=== NAT table ==="

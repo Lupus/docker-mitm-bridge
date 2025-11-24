@@ -138,6 +138,11 @@ initContainer:
   sidecarPortRangeStart: 15000  # Start of sidecar infrastructure range
   sidecarPortRangeEnd: 15099    # End of sidecar infrastructure range
   privilegedPortEnd: 1023       # Privileged ports to block (0-1023)
+  # IPv6 filtering - EXPERIMENTAL (see SECURITY_ASSESSMENT.md item #2)
+  # When enabled, mirrors IPv4 iptables rules to ip6tables to prevent IPv6 bypass.
+  # This feature was not fully tested in CI due to Kind cluster IPv6 limitations.
+  # Enable for production clusters with IPv6 networking.
+  ipv6FilteringEnabled: false
 
 # Kyverno policy configuration
 kyverno:
